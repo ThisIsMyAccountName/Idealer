@@ -3,31 +3,53 @@ import { createEventBus } from "./engine/eventBus.js";
 import { createInitialState, sanitizeState } from "./engine/gameState.js";
 import * as formulas from "./engine/formulas.js";
 import { createTickSystem } from "./engine/tickSystem.js";
+import { ASCEND_TREE } from "./config/ascendTree.js";
+import { createAscendTreeSystem } from "./game/ascendTreeSystem.js";
 import { createGeneratorSystem } from "./game/generatorSystem.js";
 import { recomputePerks } from "./game/modifiers.js";
 import { createProgressionActions } from "./game/progressionActions.js";
 import { createResearchSystem } from "./game/researchSystem.js";
 import { createResourceManager } from "./game/resourceManager.js";
 import { createUpgradesSystem } from "./game/upgradesSystem.js";
-import { applyOfflineProgress, loadState, saveState } from "./persistence/saveSystem.js";
+import {
+  applyOfflineProgress,
+  getActiveSlot,
+  listSlots,
+  loadState,
+  resetSlot,
+  saveState,
+  setActiveSlot
+} from "./persistence/saveSystem.js";
 import { createRenderer } from "./ui/render.js";
 
 const appEl = document.querySelector("#app");
 const eventBus = createEventBus();
-const state = sanitizeState(loadState() || createInitialState());
+const activeSlotId = getActiveSlot();
+const state = sanitizeState(loadState(activeSlotId) || createInitialState());
 
 const generatorDefs = BALANCE.generators;
 const upgradeDefs = BALANCE.upgrades;
 const researchDefs = BALANCE.research;
+const upgradeOrder = BALANCE.upgradeOrder;
+const researchOrder = BALANCE.researchOrder;
 const resourceManager = createResourceManager(state);
-const recompute = () => recomputePerks({ state, balance: BALANCE });
+const recompute = () => recomputePerks({ state, balance: BALANCE, ascendNodes: ASCEND_TREE });
 
 recompute();
 
 const systems = {
   generators: createGeneratorSystem({ state, generatorDefs, resourceManager, eventBus }),
-  upgrades: createUpgradesSystem({ state, upgradeDefs, resourceManager, eventBus, recompute }),
-  research: createResearchSystem({ state, researchDefs, resourceManager, eventBus, recompute }),
+  upgrades: createUpgradesSystem({ state, upgradeDefs, upgradeOrder, resourceManager, eventBus, recompute }),
+  research: createResearchSystem({
+    state,
+    researchDefs,
+    researchOrder,
+    costDefaults: BALANCE.researchCostDefaults,
+    resourceManager,
+    eventBus,
+    recompute
+  }),
+  ascendTree: createAscendTreeSystem({ state, nodes: ASCEND_TREE, resourceManager, eventBus, recompute }),
   actions: createProgressionActions({ state, resourceManager, eventBus, recompute })
 };
 
@@ -37,7 +59,23 @@ const renderer = createRenderer({
   balance: BALANCE,
   generatorDefs,
   formulas,
-  systems
+  systems,
+  saveSlots: {
+    slots: listSlots(),
+    activeSlotId,
+    onSelect: (slotId) => {
+      state.meta.offlineEligible = false;
+      saveState(state, activeSlotId);
+      setActiveSlot(slotId);
+      window.location.reload();
+    },
+    onReset: (slotId) => {
+      resetSlot(slotId);
+      if (slotId === activeSlotId) {
+        window.location.reload();
+      }
+    }
+  }
 });
 
 const offline = applyOfflineProgress(state, BALANCE, resourceManager, generatorDefs, formulas);
@@ -57,15 +95,17 @@ const tickSystem = createTickSystem({
 });
 
 setInterval(() => {
-  saveState(state);
+  state.meta.offlineEligible = true;
+  saveState(state, activeSlotId);
 }, BALANCE.autoSaveMs);
 
 window.addEventListener("beforeunload", () => {
-  saveState(state);
+  state.meta.offlineEligible = true;
+  saveState(state, activeSlotId);
 });
 
 eventBus.on("tick", () => {
-  renderer.invalidate();
+  renderer.refreshHud();
 });
 
 renderer.start();

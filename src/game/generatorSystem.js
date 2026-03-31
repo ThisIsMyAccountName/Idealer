@@ -8,7 +8,7 @@ export function createGeneratorSystem({ state, generatorDefs, resourceManager, e
     }
 
     const level = state.generators[generatorId] || 0;
-    const cost = generatorCost(def, level);
+    const cost = generatorCost(def, level, state.perks.generatorCostGrowthMultiplier);
 
     if (!resourceManager.spend(def.costResource, cost)) {
       return { ok: false, reason: `Not enough ${def.costResource}.` };

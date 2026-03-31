@@ -45,7 +45,8 @@ Then open:
 
 ## Next Milestone
 
-- Upgrade panel and research tree
+- Ascend tab with hexagonal shard tree
+- 10 additional upgrades and 10 additional research nodes
 - More resource tiers and recipes
 - More automation unlocks
 - Better progression telemetry and balancing tools
