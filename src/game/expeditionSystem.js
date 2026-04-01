@@ -21,6 +21,8 @@ function cloneRewards() {
   };
 }
 
+const AUTO_ROUTE_MODES = new Set(["manual", "safe", "balanced", "aggressive"]);
+
 export function createExpeditionSystem({ state, resourceManager, eventBus, balance, shipSystem }) {
   const expeditionBalance = balance.expeditions || {};
   const bandDefs = expeditionBalance.bands || [];
@@ -29,6 +31,11 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
 
   function getBandById(bandId) {
     return bandDefs.find((band) => band.id === bandId) || null;
+  }
+
+  function getBandRank(bandId) {
+    const idx = bandDefs.findIndex((band) => band.id === bandId);
+    return idx >= 0 ? idx + 1 : 1;
   }
 
   function getShipFallbackStats(shipId) {
@@ -113,10 +120,13 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   function getBands() {
     return bandDefs.map((band, index) => {
       const unlock = isBandUnlocked(band.id);
+      const rank = index + 1;
+      const intelLaunchCost = getIntelLaunchCostForBand(band, Date.now(), rank);
       return {
         ...band,
-        rank: index + 1,
-        unlock
+        rank,
+        unlock,
+        intelLaunchCost
       };
     });
   }
@@ -151,6 +161,173 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     });
   }
 
+  function normalizeAutoMode(mode) {
+    return AUTO_ROUTE_MODES.has(mode) ? mode : "manual";
+  }
+
+  function getPressureConfig() {
+    return {
+      minRank: Math.max(1, Math.floor(Number(expeditionBalance?.intelLaunchPressure?.minRank) || 3)),
+      windowSeconds: Math.max(10, Number(expeditionBalance?.intelLaunchPressure?.windowSeconds) || 600),
+      stackGrowth: Math.max(0.01, Number(expeditionBalance?.intelLaunchPressure?.stackGrowth) || 0.55),
+      maxStacks: Math.max(1, Math.floor(Number(expeditionBalance?.intelLaunchPressure?.maxStacks) || 6)),
+      maxFeeMultiplier: Math.max(1, Number(expeditionBalance?.intelLaunchPressure?.maxFeeMultiplier) || 3.5)
+    };
+  }
+
+  function getPressureEntry(bandId) {
+    if (!state.expeditions.meta.intelPressure || typeof state.expeditions.meta.intelPressure !== "object") {
+      state.expeditions.meta.intelPressure = {};
+    }
+    if (!state.expeditions.meta.intelPressure[bandId] || typeof state.expeditions.meta.intelPressure[bandId] !== "object") {
+      state.expeditions.meta.intelPressure[bandId] = { stacks: 0, lastLaunchAt: 0 };
+    }
+    return state.expeditions.meta.intelPressure[bandId];
+  }
+
+  function getBaseIntelLaunchCost(band, rankHint = null) {
+    const base = Number(band?.intelLaunchCost);
+    if (Number.isFinite(base) && base >= 0) {
+      return base;
+    }
+    const rank = Math.max(1, Number(rankHint) || Number(band?.rank) || 1);
+    return rank <= 2 ? 0 : rank === 3 ? 8 : 14;
+  }
+
+  function getIntelLaunchCostForBand(band, now = Date.now(), rankHint = null) {
+    const rank = Math.max(1, Number(rankHint) || Number(band?.rank) || 1);
+    const baseIntelCost = Math.max(0, getBaseIntelLaunchCost(band, rank));
+    const pressure = getPressureConfig();
+    if (rank < pressure.minRank || baseIntelCost <= 0) {
+      return 0;
+    }
+    const entry = getPressureEntry(band.id);
+    const elapsedSeconds = entry.lastLaunchAt > 0 ? Math.max(0, (now - entry.lastLaunchAt) / 1000) : pressure.windowSeconds;
+    const decayWindows = Math.floor(elapsedSeconds / pressure.windowSeconds);
+    const decayedStacks = Math.max(0, entry.stacks - decayWindows);
+    const feeMultiplier = Math.min(
+      pressure.maxFeeMultiplier,
+      1 + decayedStacks * pressure.stackGrowth
+    );
+    return Math.max(0, Math.floor(baseIntelCost * feeMultiplier));
+  }
+
+  function applyIntelPressureLaunch(band, now = Date.now()) {
+    const rank = Math.max(1, Number(band?.rank) || 1);
+    const pressure = getPressureConfig();
+    const entry = getPressureEntry(band.id);
+    const elapsedSeconds = entry.lastLaunchAt > 0 ? Math.max(0, (now - entry.lastLaunchAt) / 1000) : pressure.windowSeconds;
+    const decayWindows = Math.floor(elapsedSeconds / pressure.windowSeconds);
+    const decayedStacks = Math.max(0, entry.stacks - decayWindows);
+    const nextStacks = rank < pressure.minRank ? 0 : Math.min(pressure.maxStacks, decayedStacks + 1);
+    entry.stacks = nextStacks;
+    entry.lastLaunchAt = now;
+  }
+
+  function stageVarianceConfigForBand(band) {
+    const fallback = expeditionBalance.defaultStageVarianceRanges || {};
+    const ranges = band.stageVarianceRanges || fallback;
+    function normalizeRange(range, min, max, fallbackMin, fallbackMax) {
+      const a = Number(range?.min);
+      const b = Number(range?.max);
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        return {
+          min: clamp(Math.min(a, b), min, max),
+          max: clamp(Math.max(a, b), min, max)
+        };
+      }
+      return { min: fallbackMin, max: fallbackMax };
+    }
+    return {
+      riskDelta: normalizeRange(ranges.riskDelta, -0.2, 0.2, -0.03, 0.04),
+      yieldDelta: normalizeRange(ranges.yieldDelta, -0.25, 0.3, -0.04, 0.05),
+      speedMultiplier: normalizeRange(ranges.speedMultiplier, 0.75, 1.25, 0.96, 1.05),
+      intelFlat: normalizeRange(ranges.intelFlat, -2, 4, 0, 1)
+    };
+  }
+
+  function rollRange(run, range) {
+    const min = Number(range?.min) || 0;
+    const max = Number(range?.max) || 0;
+    return min + (max - min) * roll(run);
+  }
+
+  function buildStageVariances(run, band, stageCount) {
+    const ranges = stageVarianceConfigForBand(band);
+    const results = [];
+    for (let i = 0; i < stageCount; i += 1) {
+      results.push({
+        riskDelta: rollRange(run, ranges.riskDelta),
+        yieldDelta: rollRange(run, ranges.yieldDelta),
+        speedMultiplier: rollRange(run, ranges.speedMultiplier),
+        intelFlat: Math.round(rollRange(run, ranges.intelFlat))
+      });
+    }
+    return results;
+  }
+
+  function buildStageChoices(run, band, stageIndex) {
+    const stageVariance = run.stageVariances?.[stageIndex] || null;
+    const baseChoices = makeChoicesForBand(band);
+    if (!stageVariance) {
+      return baseChoices;
+    }
+    return baseChoices.map((choice) => ({
+      ...choice,
+      riskDelta: Number(choice.riskDelta || 0) + stageVariance.riskDelta,
+      yieldDelta: Number(choice.yieldDelta || 0) + stageVariance.yieldDelta,
+      speedMultiplier: Math.max(0.7, Number(choice.speedMultiplier || 1) * stageVariance.speedMultiplier),
+      intelFlat: Math.floor(Number(choice.intelFlat || 0) + stageVariance.intelFlat),
+      stageVarianceSummary: stageVariance
+    }));
+  }
+
+  function scoreChoiceForMode(choice, mode) {
+    const risk = Number(choice.riskDelta) || 0;
+    const yieldDelta = Number(choice.yieldDelta) || 0;
+    const speedFactor = Number(choice.speedMultiplier) || 1;
+    const speedDelta = speedFactor - 1;
+    const intelFlat = Number(choice.intelFlat) || 0;
+    if (mode === "safe") {
+      return (-risk * 2.4) + (yieldDelta * 0.3) + (speedDelta * 0.15) + (intelFlat * 0.2);
+    }
+    if (mode === "aggressive") {
+      return (yieldDelta * 2.1) + (speedDelta * 0.8) + (intelFlat * 0.35) - (Math.max(0, risk) * 0.2);
+    }
+    return (yieldDelta * 1.1) + (speedDelta * 0.5) + (intelFlat * 0.3) - (Math.abs(risk) * 0.65);
+  }
+
+  function autoChooseRouteIfNeeded() {
+    const run = state.expeditions.activeRun;
+    if (!run || !run.awaitingChoice) {
+      return { ok: false, reason: "No route decision pending." };
+    }
+    const mode = normalizeAutoMode(run.autoRouteMode || state.expeditions.meta.autoRouteMode);
+    if (mode === "manual") {
+      return { ok: false, reason: "Manual mode." };
+    }
+    const options = (run.pendingChoices || []).filter((choice) => choice.unlocked);
+    if (options.length === 0) {
+      return { ok: false, reason: "No unlocked route options." };
+    }
+    const selected = options
+      .map((choice) => ({ choice, score: scoreChoiceForMode(choice, mode) }))
+      .sort((a, b) => b.score - a.score)[0]?.choice;
+    if (!selected) {
+      return { ok: false, reason: "No route selected." };
+    }
+    const result = chooseRoute(selected.id);
+    if (result.ok) {
+      eventBus.emit("expedition:autoRoute", {
+        mode,
+        bandId: run.bandId,
+        stage: run.stageIndex + 1,
+        choiceId: selected.id
+      });
+    }
+    return result;
+  }
+
   function applyOutcome(run, outcome) {
     if (!outcome) {
       return;
@@ -162,11 +339,11 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     }
     run.modifiers.rewardFlat.matter += clampInt(outcome.matterFlat);
     run.modifiers.rewardFlat.fire += clampInt(outcome.fireFlat);
-    run.modifiers.rewardFlat.shards += clampInt(outcome.shardsFlat);
-    run.modifiers.rewardFlat.intel += clampInt(outcome.intelFlat);
+    run.modifiers.rewardFlat.shards += 0;
+    run.modifiers.rewardFlat.intel += clampInt(outcome.intelFlat) + clampInt(outcome.shardsFlat);
     run.modifiers.penalty.matter += clampInt(outcome.matterPenalty);
     run.modifiers.penalty.fire += clampInt(outcome.firePenalty);
-    run.modifiers.penalty.shards += clampInt(outcome.shardsPenalty);
+    run.modifiers.penalty.shards += 0;
   }
 
   function resolveEncounter(run, band, choice) {
@@ -276,7 +453,11 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
 
     const matterCost = Math.max(0, band.cost?.matter || 0);
     const fireCost = Math.max(0, band.cost?.fire || 0);
-    const shardCost = Math.max(0, band.cost?.shards || 0);
+    const baseIntelCost = Math.max(0, band.cost?.intel || 0);
+    const rank = getBandRank(bandId);
+    band.rank = rank;
+    const intelPressureCost = getIntelLaunchCostForBand(band, Date.now(), rank);
+    const totalIntelCost = baseIntelCost + intelPressureCost;
 
     if (!resourceManager.spend("matter", matterCost)) {
       return { ok: false, reason: `Need ${matterCost} Matter.` };
@@ -285,11 +466,13 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       state.resources.matter += matterCost;
       return { ok: false, reason: `Need ${fireCost} Fire.` };
     }
-    if (!resourceManager.spend("shards", shardCost)) {
+    if ((state.expeditions.meta.intel || 0) < totalIntelCost) {
       state.resources.matter += matterCost;
       state.resources.fire += fireCost;
-      return { ok: false, reason: `Need ${shardCost} Shards.` };
+      return { ok: false, reason: `Need ${totalIntelCost} Intel.` };
     }
+    state.expeditions.meta.intel = Math.max(0, Number(state.expeditions.meta.intel || 0) - totalIntelCost);
+    applyIntelPressureLaunch({ ...band, rank }, Date.now());
 
     const seed = (Date.now() + Math.floor(Math.random() * 1000000)) >>> 0;
     const stageCount = Math.max(1, Math.floor(Number(band.stageCount) || 2));
@@ -306,6 +489,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       segmentDurationSeconds: Math.max(6, (Number(band.durationSeconds) || 60) / stageCount / (perkSpeedMultiplier * shipSpeed)),
       stageCount,
       stageIndex: 0,
+      autoRouteMode: normalizeAutoMode(state.expeditions.meta.autoRouteMode),
       awaitingChoice: false,
       pendingChoices: [],
       routeHistory: [],
@@ -320,13 +504,24 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       },
       seed,
       startedAt: Date.now(),
-      costs: { matter: matterCost, fire: fireCost, shards: shardCost }
+      costs: { matter: matterCost, fire: fireCost, intel: totalIntelCost }
     };
 
-    state.expeditions.activeRun.pendingChoices = makeChoicesForBand(band);
+    state.expeditions.activeRun.stageVariances = buildStageVariances(state.expeditions.activeRun, band, stageCount);
+
+    state.expeditions.activeRun.pendingChoices = buildStageChoices(state.expeditions.activeRun, band, 0);
     state.expeditions.activeRun.awaitingChoice = true;
 
-    eventBus.emit("expedition:start", { bandId, stageCount, shipId: ship.shipId });
+    autoChooseRouteIfNeeded();
+
+    eventBus.emit("expedition:start", {
+      bandId,
+      stageCount,
+      shipId: ship.shipId,
+      intelCost: totalIntelCost,
+      intelBaseCost: baseIntelCost,
+      intelPressureCost
+    });
     return { ok: true };
   }
 
@@ -371,7 +566,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       ? {
           matter: Math.max(0, Math.floor((baseReward.matter || 0) * yieldMultiplier) + rewardFlat.matter - dampenedPenalty.matter),
           fire: Math.max(0, Math.floor((baseReward.fire || 0) * yieldMultiplier) + rewardFlat.fire - dampenedPenalty.fire),
-          shards: Math.max(0, Math.floor((baseReward.shards || 0) * yieldMultiplier) + Math.floor(state.perks.expeditionShardBonus || 0) + rewardFlat.shards - dampenedPenalty.shards),
+          shards: 0,
           intel: Math.max(0, Math.floor((baseReward.intel || 0) * intelMultiplier) + rewardFlat.intel)
         }
       : {
@@ -471,6 +666,10 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       return { resolved: false };
     }
     if (run.awaitingChoice) {
+      const autoResult = autoChooseRouteIfNeeded();
+      if (autoResult.ok) {
+        return { resolved: false, needsChoice: false, autoRouted: true };
+      }
       return { resolved: false, needsChoice: true };
     }
 
@@ -506,7 +705,8 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     }
 
     run.awaitingChoice = true;
-    run.pendingChoices = makeChoicesForBand(band);
+    run.pendingChoices = buildStageChoices(run, band, run.stageIndex);
+    autoChooseRouteIfNeeded();
     eventBus.emit("expedition:event", {
       type: "routeChoice",
       stage: run.stageIndex + 1,
@@ -546,7 +746,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
 
     resourceManager.add("matter", rewards.matter || 0);
     resourceManager.add("fire", rewards.fire || 0);
-    resourceManager.add("shards", rewards.shards || 0);
+    resourceManager.add("shards", 0);
     resourceManager.add("shards", duplicateShards);
     state.expeditions.meta.intel += Math.max(0, rewards.intel || 0);
     state.expeditions.meta.intel += duplicateIntel;
@@ -587,6 +787,19 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   function handleAscendReset() {
     state.expeditions.activeRun = null;
     state.expeditions.pendingRewards = null;
+    state.expeditions.meta.intelPressure = {};
+  }
+
+  function setAutoRouteMode(mode) {
+    const next = normalizeAutoMode(mode);
+    state.expeditions.meta.autoRouteMode = next;
+    if (state.expeditions.activeRun) {
+      state.expeditions.activeRun.autoRouteMode = next;
+      if (state.expeditions.activeRun.awaitingChoice && next !== "manual") {
+        autoChooseRouteIfNeeded();
+      }
+    }
+    return { ok: true, mode: next };
   }
 
   function getStatus() {
@@ -598,6 +811,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       activeRun: state.expeditions.activeRun,
       pendingRewards: state.expeditions.pendingRewards,
       meta: state.expeditions.meta,
+      autoRouteMode: normalizeAutoMode(state.expeditions.meta.autoRouteMode),
       bands: getBands()
     };
   }
@@ -608,6 +822,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     isBandUnlocked,
     start,
     chooseRoute,
+    setAutoRouteMode,
     advance,
     claim,
     abandon,

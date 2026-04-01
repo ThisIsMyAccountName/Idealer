@@ -175,11 +175,13 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
       state.resources.matter += Math.max(0, cost.matter || 0);
       return { ok: false, reason: `Need ${cost.fire || 0} Fire.` };
     }
-    if (!resourceManager.spend("shards", Math.max(0, cost.shards || 0))) {
+    const intelCost = Math.max(0, Number(cost.intel || 0));
+    if ((state.expeditions.meta.intel || 0) < intelCost) {
       state.resources.matter += Math.max(0, cost.matter || 0);
       state.resources.fire += Math.max(0, cost.fire || 0);
-      return { ok: false, reason: `Need ${cost.shards || 0} Shards.` };
+      return { ok: false, reason: `Need ${intelCost} Intel.` };
     }
+    state.expeditions.meta.intel = Math.max(0, Number(state.expeditions.meta.intel || 0) - intelCost);
 
     shipState.facilities[facilityId] = currentLevel + 1;
     eventBus.emit("ship:facilityUpgraded", { shipId, facilityId, level: currentLevel + 1 });

@@ -62,8 +62,6 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     ascendView: null,
     expeditionsView: "runs",
     fleetFocusSlot: "hull",
-    shipInventoryFilter: "compatible",
-    shipInventoryRarity: "all",
     draggingPartId: "",
     dragHoverSlot: "",
     lastExpeditionSignature: "",
@@ -92,7 +90,15 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const matter = Math.max(0, Number(cost.matter) || 0);
     const fire = Math.max(0, Number(cost.fire) || 0);
     const shards = Math.max(0, Number(cost.shards) || 0);
-    return `${formatNumber(matter)} Matter | ${formatNumber(fire)} Fire | ${formatNumber(shards)} Shards`;
+    const intel = Math.max(0, Number(cost.intel) || 0);
+    const parts = [`${formatNumber(matter)} Matter`, `${formatNumber(fire)} Fire`];
+    if (intel > 0) {
+      parts.push(`${formatNumber(intel)} Intel`);
+    }
+    if (shards > 0) {
+      parts.push(`${formatNumber(shards)} Shards`);
+    }
+    return parts.join(" | ");
   }
 
   function formatPartEffects(effects) {
@@ -145,6 +151,12 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div class="hint" id="ascend-gain">Projected gain: +0 Shards</div>
             <div class="action">${actionButton("Ascend", "ghost", "ascend")}</div>
           </div>
+          <div class="resource-card resource-card--intel">
+            <div class="label">Expedition Intel</div>
+            <div class="value" id="intel-value">0</div>
+            <div class="hint">Used for expedition launches and ship upgrades</div>
+            <div class="action">${actionButton("Expeditions", "secondary", "tab:expeditions")}</div>
+          </div>
           <div class="resource-card resource-card--prod">
             <div class="label">Production Multiplier</div>
             <div class="value" id="prod-multiplier">x1.00</div>
@@ -171,6 +183,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.matter = appEl.querySelector("#matter-value");
     refs.fire = appEl.querySelector("#fire-value");
     refs.shards = appEl.querySelector("#shards-value");
+    refs.intel = appEl.querySelector("#intel-value");
     refs.prodMultiplier = appEl.querySelector("#prod-multiplier");
     refs.mainGrid = appEl.querySelector("#main-grid");
     ui.pinnedEl = appEl.querySelector("#pinned-panel");
@@ -386,6 +399,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
   function renderShipGraphic(shipStatus, selectedShipId, selectedShipState, selectedShipDef, selectedSlot, partDefs) {
     const visual = selectedShipDef.visual || {};
+    const assetPath = typeof visual.asset === "string" && visual.asset.length > 0 ? visual.asset : "";
     const mastCount = Math.max(1, Math.min(3, Math.floor(Number(visual.mastCount) || 1)));
     const mastOffsets = mastCount === 1
       ? [46]
@@ -424,12 +438,17 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       .join("");
 
     const theme = selectedShipDef.visual?.theme || selectedShipId || "raft";
-    return `
-      <div class="ship-graphic ship-graphic--${theme}" style="${paletteStyle}">
+    const artMarkup = assetPath
+      ? `<img class="ship-asset" src="${assetPath}" alt="${selectedShipDef.name || selectedShipId} profile">`
+      : `
         <div class="ship-waterline"></div>
         <div class="ship-hull"></div>
         ${masts}
         <div class="ship-layer ship-layer--sails"></div>
+      `;
+    return `
+      <div class="ship-graphic ship-graphic--${theme}" style="${paletteStyle}">
+        ${artMarkup}
         ${zones}
       </div>
     `;
@@ -568,38 +587,26 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           compatibleWithFocusSlot: def.slot === selectedSlot
         };
       })
-      .filter(Boolean);
-
-    const hoverSlot = ui.dragHoverSlot || "";
-    const filterMode = ui.shipInventoryFilter || "compatible";
-    const rarityFilter = ui.shipInventoryRarity || "all";
-    const filteredPartItems = allPartItems
-      .filter((item) => {
-        if (rarityFilter !== "all" && (item.def.rarity || "rare") !== rarityFilter) {
-          return false;
+      .filter((item) => item && item.compatibleWithSelectedShip)
+      .sort((a, b) => {
+        const rarityWeight = { "semi-rare": 1, rare: 2, epic: 3 };
+        if (a.def.slot !== b.def.slot) {
+          return String(a.def.slot).localeCompare(String(b.def.slot));
         }
-        if (filterMode === "all") {
-          return true;
+        const rarityDiff = (rarityWeight[a.def.rarity] || 0) - (rarityWeight[b.def.rarity] || 0);
+        if (rarityDiff !== 0) {
+          return rarityDiff;
         }
-        if (filterMode === "ship") {
-          return item.compatibleWithSelectedShip;
-        }
-        if (filterMode === "hovered") {
-          if (!hoverSlot) {
-            return false;
-          }
-          return item.compatibleWithSelectedShip && item.def.slot === hoverSlot;
-        }
-        return item.compatibleWithSelectedShip && item.compatibleWithFocusSlot;
+        return String(a.def.name || a.partId).localeCompare(String(b.def.name || b.partId));
       });
 
-    const inventoryRows = filteredPartItems.length > 0
-      ? filteredPartItems.map((item) => {
+    const inventoryRows = allPartItems.length > 0
+      ? allPartItems.map((item) => {
         const encoded = encodeURIComponent(item.partId);
         const effectText = formatPartEffects(item.def.effects || {});
         const rarity = item.def.rarity || "rare";
         const canEquipByCount = item.availableCount > 0 || selectedShipState.equippedParts?.[selectedSlot] === item.partId;
-        const canEquipByFilter = item.compatibleWithSelectedShip && item.compatibleWithFocusSlot;
+        const canEquipByFilter = item.compatibleWithSelectedShip;
         const canEquip = canEquipByCount && canEquipByFilter;
         const equippedBadge = item.equippedCount > 0 ? `<span class="chip">Equipped ${item.equippedCount}</span>` : "";
         const shipBadge = item.def.shipId ? `<span class="chip chip--ship">${item.def.shipId}</span>` : "";
@@ -610,33 +617,11 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
               <div class="chip-row"><span class="chip chip--rarity">${rarity}</span><span class="chip">${item.def.slot}</span>${shipBadge}${equippedBadge}</div>
               <div class="kv">${effectText || "No stat modifiers."}</div>
             </div>
-            ${actionButton("Equip", "secondary compact", `ship:equip:${selectedShipId}:${selectedSlot}:${encoded}`, !canEquip)}
+            ${actionButton("Equip", "secondary compact", `ship:equip:${selectedShipId}:${item.def.slot}:${encoded}`, !canEquip)}
           </div>
         `;
       }).join("")
-      : "<div class=\"kv\">No parts match the active filters.</div>";
-
-    const rarityOptions = ["all", "semi-rare", "rare", "epic"];
-    const filterButtons = [
-      { id: "compatible", label: "Focus Slot" },
-      { id: "ship", label: "Current Ship" },
-      { id: "hovered", label: "Hovered Slot" },
-      { id: "all", label: "All" }
-    ]
-      .map((filter) => actionButton(
-        filter.label,
-        `ghost compact ${filterMode === filter.id ? "active" : ""}`,
-        `ship:filter:${filter.id}`,
-        filter.id === "hovered" && !hoverSlot
-      ))
-      .join("");
-    const rarityButtons = rarityOptions
-      .map((rarity) => actionButton(
-        rarity === "all" ? "Any Rarity" : rarity,
-        `ghost compact ${rarityFilter === rarity ? "active" : ""}`,
-        `ship:rarity:${rarity}`
-      ))
-      .join("");
+      : "<div class=\"kv\">No compatible parts available for this ship yet.</div>";
 
     return `
       <h2>Ships</h2>
@@ -646,11 +631,9 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           <div class="kv">${selectedShipDef.name || selectedShipId} | Speed x${selectedShipStats ? selectedShipStats.speedMultiplier.toFixed(2) : "1.00"} | Risk Mit +${selectedShipStats ? (selectedShipStats.riskMitigation * 100).toFixed(1) : "0.0"}% | Yield x${selectedShipStats ? selectedShipStats.yieldMultiplier.toFixed(2) : "1.00"} | Rare x${selectedShipStats ? selectedShipStats.rareDropWeight.toFixed(2) : "1.00"}</div>
         </section>
         <section class="ship-gui-inventory">
-          <h3>Part Inventory</h3>
-          <div class="inventory-filters">
-            <div class="chip-row">${filterButtons}</div>
-            <div class="chip-row">${rarityButtons}</div>
-            <div class="kv">Focus slot: ${selectedSlot} ${hoverSlot ? `| Hover slot: ${hoverSlot}` : ""}</div>
+          <div class="inventory-header">
+            <h3>Part Inventory</h3>
+            <div class="kv">Sorted by slot, rarity, and name. Drag to a slot or press Equip on a card.</div>
           </div>
           <div class="inventory-list inventory-list--parts">${inventoryRows}</div>
         </section>
@@ -666,6 +649,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const shipLine = expeditionStatus.selectedShip
       ? `<div class="kv">Ship: ${expeditionStatus.selectedShip.toUpperCase()}${shipStats ? ` | Speed x${shipStats.speedMultiplier.toFixed(2)} | Risk Mit +${(shipStats.riskMitigation * 100).toFixed(1)}% | Yield x${shipStats.yieldMultiplier.toFixed(2)}` : ""}</div>`
       : "<div class=\"kv\">No ship selected.</div>";
+    const autoMode = expeditionStatus.autoRouteMode || "manual";
     const subTabs = `
       <div class="expedition-subtabs">
         ${actionButton("Runs", `ghost ${ui.expeditionsView === "runs" ? "active" : ""}`, "expedition:view:runs")}
@@ -684,20 +668,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     const metaRows = `
       <div class="row">
-        <div><strong>Intel</strong></div>
-        <div class="kv">${formatNumber(expeditionStatus.meta.intel || 0)}</div>
-      </div>
-      <div class="row">
-        <div><strong>Completed Runs</strong></div>
-        <div class="kv">${formatNumber(expeditionStatus.meta.completedRuns || 0)}</div>
-      </div>
-      <div class="row">
-        <div><strong>Failed Runs</strong></div>
-        <div class="kv">${formatNumber(expeditionStatus.meta.failedRuns || 0)}</div>
-      </div>
-      <div class="row">
-        <div><strong>Best Band</strong></div>
-        <div class="kv">${formatNumber(expeditionStatus.meta.bestBand || 0)}</div>
+        <div class="kv"><strong>Intel:</strong> ${formatNumber(expeditionStatus.meta.intel || 0)} | <strong>Completed Runs:</strong> ${formatNumber(expeditionStatus.meta.completedRuns || 0)} | <strong>Failed Runs:</strong> ${formatNumber(expeditionStatus.meta.failedRuns || 0)} | <strong>Best Band:</strong> ${formatNumber(expeditionStatus.meta.bestBand || 0)}</div>
       </div>
     `;
 
@@ -732,7 +703,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         <div class="row">
           <div>
             <div><strong>${pending.bandName}</strong> resolved: ${outcome}</div>
-            <div class="kv">Claim: +${formatNumber(rewards.matter || 0)} Matter, +${formatNumber(rewards.fire || 0)} Fire, +${formatNumber(rewards.shards || 0)} Shards, +${formatNumber(rewards.intel || 0)} Intel</div>
+            <div class="kv">Claim: +${formatNumber(rewards.matter || 0)} Matter, +${formatNumber(rewards.fire || 0)} Fire, +${formatNumber(rewards.intel || 0)} Intel</div>
             ${routeSummary ? `<div class="kv">Route: ${routeSummary}</div>` : ""}
             ${encounterSummary ? `<div class="kv">Encounters: ${encounterSummary}</div>` : ""}
             ${dropSummary ? `<div class="kv">Rare Finds: ${dropSummary}</div>` : ""}
@@ -787,6 +758,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
                 const yieldText = `${yieldDelta >= 0 ? "+" : ""}${(yieldDelta * 100).toFixed(1)}% yield`;
                 const projectedRisk = clamp(currentRisk + risk, 0.04, 0.98);
                 const projectedMitigatedRisk = projectedRisk * (1 - totalMitigation);
+                const variance = choice.stageVarianceSummary;
+                const varianceLine = variance
+                  ? `<div class="kv">Stage variance: risk ${(variance.riskDelta >= 0 ? "+" : "")}${(variance.riskDelta * 100).toFixed(1)}%, yield ${(variance.yieldDelta >= 0 ? "+" : "")}${(variance.yieldDelta * 100).toFixed(1)}%, speed x${Number(variance.speedMultiplier || 1).toFixed(2)}, intel ${(Number(variance.intelFlat || 0) >= 0 ? "+" : "")}${Math.round(Number(variance.intelFlat || 0))}</div>`
+                  : "";
                 const routeLine = choice.encounterPool
                   ? `<div class="kv">Encounter profile: ${choice.encounterPool}</div>`
                   : "";
@@ -800,6 +775,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
                       <div class="kv">${choice.description || ""}</div>
                       <div class="kv">${riskText} | ${yieldText}</div>
                       <div class="kv">Projected risk: ${(projectedRisk * 100).toFixed(1)}% (mitigated ${(projectedMitigatedRisk * 100).toFixed(1)}%)</div>
+                      ${varianceLine}
                       ${routeLine}
                       ${lockLine}
                     </div>
@@ -822,6 +798,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div class="kv" id="expedition-stage-text">Stage ${Math.min(run.stageIndex + 1, run.stageCount)} / ${run.stageCount} | ${progress.toFixed(1)}% total</div>
             <div class="kv" id="expedition-segment-text">Segment: ${formatDuration(run.segmentElapsedSeconds || 0)} / ${formatDuration(run.segmentDurationSeconds || 0)}</div>
             <div class="kv">Current risk: ${(currentRisk * 100).toFixed(1)}% (mitigated ${(mitigatedRisk * 100).toFixed(1)}%)</div>
+            <div class="kv">Route mode: ${run.autoRouteMode || autoMode}</div>
             ${routeRows}
             ${encounterRows}
             ${dropRows}
@@ -844,12 +821,16 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div>
               <div><strong>Band ${band.rank}: ${band.name}</strong></div>
               <div class="kv">${band.description}</div>
-              <div class="kv">Cost: ${formatNumber(cost.matter || 0)} Matter | ${formatNumber(cost.fire || 0)} Fire | ${formatNumber(cost.shards || 0)} Shards</div>
+              <div class="kv">Cost: ${formatNumber(cost.matter || 0)} Matter | ${formatNumber(cost.fire || 0)} Fire | ${formatNumber(cost.intel || 0)} Intel</div>
+              <div class="kv">Intel Pressure Fee: ${formatNumber(band.intelLaunchCost || 0)} Intel</div>
               <div class="kv">Duration: ${formatDuration(band.durationSeconds || 0)} | Risk: ${((band.risk || 0) * 100).toFixed(1)}%</div>
               <div class="kv">Stages: ${Math.max(1, band.stageCount || 1)} | Branching route decisions each stage</div>
               ${requirements}
             </div>
-            ${actionButton("Launch", "ghost", `expedition:start:${band.id}`, disabled)}
+            <div class="expedition-launch-actions">
+              ${actionButton("Launch", "ghost", `expedition:start:${band.id}`, disabled)}
+              ${actionButton("Auto", "secondary", `expedition:auto:${band.id}`, disabled)}
+            </div>
           </div>
         `;
       })
@@ -1142,6 +1123,24 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       } else if (action.startsWith("expedition:view:")) {
         ui.expeditionsView = action.split(":")[2] || "runs";
         renderPanel();
+      } else if (action.startsWith("expedition:auto:")) {
+        const bandId = action.split(":")[2] || "";
+        const selectedMode = systems.expeditions.getStatus().autoRouteMode || "manual";
+        const modeToUse = selectedMode === "manual" ? "balanced" : selectedMode;
+        const modeResult = systems.expeditions.setAutoRouteMode(modeToUse);
+        if (!modeResult.ok) {
+          setNotice(modeResult.reason || "Unable to set auto mode.", false);
+          renderPanel();
+          return;
+        }
+        const result = systems.expeditions.start(bandId);
+        setNotice(result.ok ? `Auto expedition launched (${modeResult.mode}).` : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("expedition:mode:")) {
+        const mode = action.split(":")[2] || "manual";
+        const result = systems.expeditions.setAutoRouteMode(mode);
+        setNotice(result.ok ? `Route mode set to ${result.mode}.` : (result.reason || "Unable to set route mode."), result.ok);
+        renderPanel();
       } else if (action.startsWith("expedition:start:")) {
         const bandId = action.split(":")[2];
         const result = systems.expeditions.start(bandId);
@@ -1179,14 +1178,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         renderPanel();
       } else if (action.startsWith("ship:focus:")) {
         ui.fleetFocusSlot = action.split(":")[2] || "hull";
-        ui.shipInventoryFilter = "compatible";
         ui.dragHoverSlot = "";
-        renderPanel();
-      } else if (action.startsWith("ship:filter:")) {
-        ui.shipInventoryFilter = action.split(":")[2] || "compatible";
-        renderPanel();
-      } else if (action.startsWith("ship:rarity:")) {
-        ui.shipInventoryRarity = action.split(":")[2] || "all";
         renderPanel();
       } else if (action.startsWith("ship:upgrade:")) {
         const shipId = action.split(":")[2];
@@ -1360,6 +1352,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.matter.textContent = formatNumber(state.resources.matter);
     refs.fire.textContent = formatNumber(state.resources.fire);
     refs.shards.textContent = formatNumber(state.resources.shards);
+    refs.intel.textContent = formatNumber(state.expeditions?.meta?.intel || 0);
     refs.prodMultiplier.textContent = `x${state.perks.productionMultiplier.toFixed(2)}`;
 
     const clickBase = (balance.baseClickMatter + state.perks.clickMatterBonus) * state.perks.clickMultiplier;

@@ -118,6 +118,19 @@ export const BALANCE = {
     offlineProgressMultiplier: 0.55,
     minSuccessChance: 0.15,
     maxSuccessChance: 0.95,
+    intelLaunchPressure: {
+      minRank: 3,
+      windowSeconds: 540,
+      stackGrowth: 0.55,
+      maxStacks: 6,
+      maxFeeMultiplier: 3.4
+    },
+    defaultStageVarianceRanges: {
+      riskDelta: { min: -0.03, max: 0.04 },
+      yieldDelta: { min: -0.04, max: 0.05 },
+      speedMultiplier: { min: 0.96, max: 1.05 },
+      intelFlat: { min: 0, max: 1 }
+    },
     ships: {
       raft: {
         id: "raft",
@@ -126,6 +139,7 @@ export const BALANCE = {
         unlock: { type: "ascensionNode", value: "expeditionKeystone" },
         visual: {
           theme: "raft",
+          asset: "assets/ships/raft.svg",
           mastCount: 1,
           palette: {
             hullStart: "#9a6a36",
@@ -158,6 +172,7 @@ export const BALANCE = {
         requiredBlueprint: "ship:sloop:keel-plan",
         visual: {
           theme: "sloop",
+          asset: "assets/ships/sloop.svg",
           mastCount: 2,
           palette: {
             hullStart: "#8f6736",
@@ -190,6 +205,7 @@ export const BALANCE = {
         requiredBlueprint: "ship:brig:frame-draft",
         visual: {
           theme: "brig",
+          asset: "assets/ships/brig.svg",
           mastCount: 2,
           palette: {
             hullStart: "#7f5532",
@@ -222,6 +238,7 @@ export const BALANCE = {
         requiredBlueprint: "ship:galleon:royal-charter",
         visual: {
           theme: "galleon",
+          asset: "assets/ships/galleon.svg",
           mastCount: 3,
           palette: {
             hullStart: "#6f4c2d",
@@ -252,12 +269,12 @@ export const BALANCE = {
         label: "Hull",
         maxLevel: 6,
         levelCosts: [
-          { matter: 1200, fire: 20, shards: 1 },
-          { matter: 3200, fire: 55, shards: 2 },
-          { matter: 8400, fire: 130, shards: 4 },
-          { matter: 21000, fire: 300, shards: 8 },
-          { matter: 47000, fire: 640, shards: 15 },
-          { matter: 92000, fire: 1300, shards: 28 }
+          { matter: 1200, fire: 20, intel: 2 },
+          { matter: 3200, fire: 55, intel: 4 },
+          { matter: 8400, fire: 130, intel: 8 },
+          { matter: 21000, fire: 300, intel: 14 },
+          { matter: 47000, fire: 640, intel: 22 },
+          { matter: 92000, fire: 1300, intel: 34 }
         ],
         effectsPerLevel: {
           penaltyDampening: 0.04,
@@ -268,12 +285,12 @@ export const BALANCE = {
         label: "Sail",
         maxLevel: 6,
         levelCosts: [
-          { matter: 900, fire: 30, shards: 1 },
-          { matter: 2400, fire: 85, shards: 2 },
-          { matter: 6200, fire: 210, shards: 4 },
-          { matter: 15200, fire: 470, shards: 8 },
-          { matter: 36000, fire: 1020, shards: 15 },
-          { matter: 76000, fire: 2100, shards: 28 }
+          { matter: 900, fire: 30, intel: 2 },
+          { matter: 2400, fire: 85, intel: 4 },
+          { matter: 6200, fire: 210, intel: 7 },
+          { matter: 15200, fire: 470, intel: 13 },
+          { matter: 36000, fire: 1020, intel: 21 },
+          { matter: 76000, fire: 2100, intel: 33 }
         ],
         effectsPerLevel: {
           speedMultiplier: 0.045
@@ -283,11 +300,11 @@ export const BALANCE = {
         label: "Anchor",
         maxLevel: 5,
         levelCosts: [
-          { matter: 1000, fire: 22, shards: 1 },
-          { matter: 2800, fire: 72, shards: 3 },
-          { matter: 7200, fire: 180, shards: 6 },
-          { matter: 18000, fire: 420, shards: 11 },
-          { matter: 43000, fire: 930, shards: 20 }
+          { matter: 1000, fire: 22, intel: 2 },
+          { matter: 2800, fire: 72, intel: 5 },
+          { matter: 7200, fire: 180, intel: 10 },
+          { matter: 18000, fire: 420, intel: 17 },
+          { matter: 43000, fire: 930, intel: 27 }
         ],
         effectsPerLevel: {
           riskMitigation: 0.025
@@ -297,11 +314,11 @@ export const BALANCE = {
         label: "Net",
         maxLevel: 5,
         levelCosts: [
-          { matter: 1100, fire: 24, shards: 1 },
-          { matter: 3000, fire: 78, shards: 3 },
-          { matter: 7900, fire: 195, shards: 6 },
-          { matter: 19600, fire: 460, shards: 12 },
-          { matter: 46500, fire: 1000, shards: 22 }
+          { matter: 1100, fire: 24, intel: 2 },
+          { matter: 3000, fire: 78, intel: 5 },
+          { matter: 7900, fire: 195, intel: 10 },
+          { matter: 19600, fire: 460, intel: 18 },
+          { matter: 46500, fire: 1000, intel: 30 }
         ],
         effectsPerLevel: {
           rareDropWeight: 0.09,
@@ -416,9 +433,16 @@ export const BALANCE = {
         durationSeconds: 60,
         stageCount: 2,
         risk: 0.18,
-        cost: { matter: 1200, fire: 20, shards: 0 },
+        cost: { matter: 1200, fire: 20, intel: 0 },
         unlock: { type: "ascensionNodeCount", value: 2 },
-        rewards: { matter: 2400, fire: 28, shards: 1, intel: 2 },
+        intelLaunchCost: 0,
+        rewards: { matter: 2400, fire: 28, shards: 0, intel: 5 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.03, max: 0.035 },
+          yieldDelta: { min: -0.05, max: 0.05 },
+          speedMultiplier: { min: 0.95, max: 1.06 },
+          intelFlat: { min: 0, max: 1 }
+        },
         routeChoices: [
           {
             id: "shielded",
@@ -482,10 +506,17 @@ export const BALANCE = {
         durationSeconds: 95,
         stageCount: 3,
         risk: 0.28,
-        cost: { matter: 5200, fire: 60, shards: 1 },
+        cost: { matter: 5200, fire: 60, intel: 3 },
         unlock: { type: "ascensionNodeCount", value: 7 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle"],
-        rewards: { matter: 9600, fire: 120, shards: 3, intel: 5 },
+        intelLaunchCost: 5,
+        rewards: { matter: 9600, fire: 120, shards: 0, intel: 11 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.04, max: 0.05 },
+          yieldDelta: { min: -0.06, max: 0.07 },
+          speedMultiplier: { min: 0.94, max: 1.08 },
+          intelFlat: { min: 0, max: 2 }
+        },
         routeChoices: [
           {
             id: "shielded",
@@ -535,7 +566,7 @@ export const BALANCE = {
             name: "Pressure Fracture",
             description: "A wall fracture threatens the haul path.",
             difficulty: 0.42,
-            success: { yieldDelta: 0.1, shardsFlat: 1 },
+            success: { yieldDelta: 0.1, intelFlat: 2 },
             fail: { riskDelta: 0.08, yieldDelta: -0.08, firePenalty: 18 }
           },
           {
@@ -569,10 +600,17 @@ export const BALANCE = {
         durationSeconds: 140,
         stageCount: 4,
         risk: 0.38,
-        cost: { matter: 16000, fire: 210, shards: 4 },
+        cost: { matter: 16000, fire: 210, intel: 8 },
         unlock: { type: "ascensionNodeCount", value: 13 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals"],
-        rewards: { matter: 36000, fire: 460, shards: 8, intel: 11 },
+        intelLaunchCost: 10,
+        rewards: { matter: 36000, fire: 460, shards: 0, intel: 21 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.05, max: 0.06 },
+          yieldDelta: { min: -0.08, max: 0.09 },
+          speedMultiplier: { min: 0.92, max: 1.1 },
+          intelFlat: { min: 1, max: 3 }
+        },
         routeChoices: [
           {
             id: "shielded",
@@ -633,7 +671,7 @@ export const BALANCE = {
             name: "Rift Storm",
             description: "Chaotic anomaly winds batter containment rigging.",
             difficulty: 0.55,
-            success: { yieldDelta: 0.16, shardsFlat: 2, intelFlat: 2 },
+            success: { yieldDelta: 0.16, intelFlat: 4 },
             fail: { riskDelta: 0.11, yieldDelta: -0.12, matterPenalty: 1800, firePenalty: 50 }
           },
           {
@@ -642,14 +680,14 @@ export const BALANCE = {
             description: "A broken gate can be stabilized for huge salvage.",
             difficulty: 0.5,
             success: { yieldDelta: 0.2, fireFlat: 40 },
-            fail: { riskDelta: 0.1, shardsPenalty: 1, firePenalty: 30 }
+            fail: { riskDelta: 0.1, intelFlat: -1, firePenalty: 30 }
           },
           {
             id: "vault-harmonics",
             name: "Vault Harmonics",
             description: "Sovereign vault harmonics can be tuned for amplified extraction.",
             difficulty: 0.53,
-            success: { yieldDelta: 0.18, shardsFlat: 2, intelFlat: 2 },
+            success: { yieldDelta: 0.18, intelFlat: 4 },
             fail: { riskDelta: 0.08, matterPenalty: 1300 }
           },
           {
@@ -657,8 +695,8 @@ export const BALANCE = {
             name: "Salvage Surge",
             description: "A collapsing wake reveals concentrated shard debris.",
             difficulty: 0.58,
-            success: { yieldDelta: 0.24, shardsFlat: 3 },
-            fail: { riskDelta: 0.12, shardsPenalty: 2 }
+            success: { yieldDelta: 0.24, intelFlat: 5 },
+            fail: { riskDelta: 0.12, intelFlat: -2 }
           }
         ],
         encounterPools: {

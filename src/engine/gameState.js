@@ -36,7 +36,9 @@ export function createInitialState() {
         unlockedBands: {},
         completedRuns: 0,
         failedRuns: 0,
-        bestBand: 0
+        bestBand: 0,
+        autoRouteMode: "manual",
+        intelPressure: {}
       },
       selectedShip: "raft",
       ships: {
@@ -219,6 +221,21 @@ export function sanitizeState(state) {
   safe.expeditions.meta.completedRuns = Math.max(0, Math.floor(Number(safe.expeditions.meta.completedRuns) || 0));
   safe.expeditions.meta.failedRuns = Math.max(0, Math.floor(Number(safe.expeditions.meta.failedRuns) || 0));
   safe.expeditions.meta.bestBand = Math.max(0, Math.floor(Number(safe.expeditions.meta.bestBand) || 0));
+  const allowedRouteModes = new Set(["manual", "safe", "balanced", "aggressive"]);
+  if (!allowedRouteModes.has(safe.expeditions.meta.autoRouteMode)) {
+    safe.expeditions.meta.autoRouteMode = "manual";
+  }
+  const pressure = safe.expeditions.meta.intelPressure && typeof safe.expeditions.meta.intelPressure === "object"
+    ? safe.expeditions.meta.intelPressure
+    : {};
+  Object.keys(pressure).forEach((bandId) => {
+    const entry = pressure[bandId] || {};
+    pressure[bandId] = {
+      stacks: Math.max(0, Math.floor(Number(entry.stacks) || 0)),
+      lastLaunchAt: Math.max(0, Math.floor(Number(entry.lastLaunchAt) || 0))
+    };
+  });
+  safe.expeditions.meta.intelPressure = pressure;
   if (!safe.expeditions.activeRun || typeof safe.expeditions.activeRun !== "object") {
     safe.expeditions.activeRun = null;
   }
