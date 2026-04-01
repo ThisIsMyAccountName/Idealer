@@ -5,11 +5,13 @@ import * as formulas from "./engine/formulas.js";
 import { createTickSystem } from "./engine/tickSystem.js";
 import { ASCEND_TREE } from "./config/ascendTree.js";
 import { createAscendTreeSystem } from "./game/ascendTreeSystem.js";
+import { createExpeditionSystem } from "./game/expeditionSystem.js";
 import { createGeneratorSystem } from "./game/generatorSystem.js";
 import { recomputePerks } from "./game/modifiers.js";
 import { createProgressionActions } from "./game/progressionActions.js";
 import { createResearchSystem } from "./game/researchSystem.js";
 import { createResourceManager } from "./game/resourceManager.js";
+import { createShipSystem } from "./game/shipSystem.js";
 import { createUpgradesSystem } from "./game/upgradesSystem.js";
 import {
   applyOfflineProgress,
@@ -50,8 +52,17 @@ const systems = {
     recompute
   }),
   ascendTree: createAscendTreeSystem({ state, nodes: ASCEND_TREE, resourceManager, eventBus, recompute }),
-  actions: createProgressionActions({ state, resourceManager, eventBus, recompute })
+  ships: createShipSystem({ state, balance: BALANCE, resourceManager, eventBus }),
+  expeditions: null
 };
+systems.expeditions = createExpeditionSystem({
+  state,
+  resourceManager,
+  eventBus,
+  balance: BALANCE,
+  shipSystem: systems.ships
+});
+systems.actions = createProgressionActions({ state, resourceManager, eventBus, recompute, expeditionSystem: systems.expeditions });
 
 const renderer = createRenderer({
   appEl,
@@ -78,7 +89,16 @@ const renderer = createRenderer({
   }
 });
 
-const offline = applyOfflineProgress(state, BALANCE, resourceManager, generatorDefs, formulas);
+const offline = applyOfflineProgress(
+  state,
+  BALANCE,
+  resourceManager,
+  generatorDefs,
+  formulas,
+  (elapsedSeconds) => {
+    systems.expeditions.advance(elapsedSeconds, BALANCE.expeditions?.offlineProgressMultiplier || 0.5);
+  }
+);
 if (offline.elapsedSeconds > 5) {
   renderer.setNotice(
     `Offline gains: +${offline.matterGain.toFixed(1)} Matter, +${offline.fireGain.toFixed(1)} Fire.`,
@@ -91,7 +111,10 @@ const tickSystem = createTickSystem({
   balance: BALANCE,
   generatorDefs,
   resourceManager,
-  eventBus
+  eventBus,
+  onAdvance: (dtSeconds) => {
+    systems.expeditions.advance(dtSeconds, 1);
+  }
 });
 
 setInterval(() => {

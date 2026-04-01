@@ -1,6 +1,6 @@
 import { productionPerSecond } from "./formulas.js";
 
-export function createTickSystem({ state, balance, generatorDefs, resourceManager, eventBus }) {
+export function createTickSystem({ state, balance, generatorDefs, resourceManager, eventBus, onAdvance }) {
   let timerId = null;
 
   function runTick() {
@@ -12,6 +12,9 @@ export function createTickSystem({ state, balance, generatorDefs, resourceManage
     const rates = productionPerSecond(state, generatorDefs);
     resourceManager.add("matter", rates.matter * dtSeconds);
     resourceManager.add("fire", rates.fire * dtSeconds);
+    if (typeof onAdvance === "function") {
+      onAdvance(dtSeconds);
+    }
 
     eventBus.emit("tick", { state, rates, dtSeconds });
   }

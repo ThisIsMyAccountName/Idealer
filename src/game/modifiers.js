@@ -21,7 +21,12 @@ export function recomputePerks({ state, balance, ascendNodes }) {
     prismRateMultiplier: 1,
     conversionCostMultiplier: 1,
     offlineEfficiencyMultiplier: 1,
-    researchCostMultiplier: 1
+    researchCostMultiplier: 1,
+    expeditionYieldMultiplier: 1,
+    expeditionSpeedMultiplier: 1,
+    expeditionRiskMitigation: 0,
+    expeditionShardBonus: 0,
+    expeditionIntelMultiplier: 1
   };
 
   const kineticGloves = (state.upgrades.kineticGloves || 0) * upgradePower;
@@ -313,6 +318,21 @@ export function recomputePerks({ state, balance, ascendNodes }) {
       if (effect.researchCostMultiplier) {
         perks.researchCostMultiplier *= effect.researchCostMultiplier;
       }
+      if (effect.expeditionYieldMultiplier) {
+        perks.expeditionYieldMultiplier *= effect.expeditionYieldMultiplier;
+      }
+      if (effect.expeditionSpeedMultiplier) {
+        perks.expeditionSpeedMultiplier *= effect.expeditionSpeedMultiplier;
+      }
+      if (effect.expeditionRiskMitigation) {
+        perks.expeditionRiskMitigation += effect.expeditionRiskMitigation;
+      }
+      if (effect.expeditionShardBonus) {
+        perks.expeditionShardBonus += effect.expeditionShardBonus;
+      }
+      if (effect.expeditionIntelMultiplier) {
+        perks.expeditionIntelMultiplier *= effect.expeditionIntelMultiplier;
+      }
     });
   }
 
@@ -330,6 +350,9 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   perks.researchCostMultiplier = clampMin(perks.researchCostMultiplier, 0.05);
   perks.offlineEfficiencyMultiplier = clampMin(perks.offlineEfficiencyMultiplier, 0.1);
 
+  perks.expeditionYieldMultiplier = clampMin(perks.expeditionYieldMultiplier, 0.05);
+  perks.expeditionSpeedMultiplier = clampMin(perks.expeditionSpeedMultiplier, 0.05);
+  perks.expeditionIntelMultiplier = clampMin(perks.expeditionIntelMultiplier, 0.05);
   state.perks = perks;
   return perks;
 }

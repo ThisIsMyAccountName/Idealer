@@ -12,5 +12,12 @@ export function isUnlockMet(state, unlock) {
   if (unlock.type === "ascensions") {
     return state.lifetime.totalAscensions >= unlock.value;
   }
+  if (unlock.type === "ascensionNode") {
+    return Boolean(state.ascensionTree?.[unlock.value]);
+  }
+  if (unlock.type === "ascensionNodeCount") {
+    const count = Object.values(state.ascensionTree || {}).filter(Boolean).length;
+    return count >= unlock.value;
+  }
   return true;
 }

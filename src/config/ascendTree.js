@@ -3,7 +3,7 @@ export const ASCEND_TREE = [
     id: "singularity",
     name: "Singularity Node",
     description: "Unlock the Ascension grid.",
-    cost: 2,
+    cost: 1,
     q: 0,
     r: 0,
     effect: { productionMultiplier: 1.03 }
@@ -538,6 +538,43 @@ export const ASCEND_TREE = [
     q: 2,
     r: 2,
     effect: { productionMultiplier: 1.06 }
+  },
+  {
+    id: "expeditionKeystone",
+    name: "Expedition Keystone",
+    description: "Unlocks prestige expeditions and +10% expedition yield.",
+    cost: 18,
+    q: 3,
+    r: 2,
+    unlock: { type: "ascensions", value: 1 },
+    effect: { expeditionYieldMultiplier: 1.1 }
+  },
+  {
+    id: "cartographerSpindle",
+    name: "Cartographer Spindle",
+    description: "+12% expedition speed and +5% intel gain.",
+    cost: 20,
+    q: 4,
+    r: 2,
+    effect: { expeditionSpeedMultiplier: 1.12, expeditionIntelMultiplier: 1.05 }
+  },
+  {
+    id: "hazardSeals",
+    name: "Hazard Seals",
+    description: "Reduce expedition failure risk by 7%.",
+    cost: 22,
+    q: 5,
+    r: 1,
+    effect: { expeditionRiskMitigation: 0.07 }
+  },
+  {
+    id: "salvageVats",
+    name: "Salvage Vats",
+    description: "+2 guaranteed shard salvage on expedition success.",
+    cost: 24,
+    q: 5,
+    r: 0,
+    effect: { expeditionShardBonus: 2 }
   },
   {
     id: "novaLoom",

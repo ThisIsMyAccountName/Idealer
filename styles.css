@@ -159,13 +159,17 @@ h1 {
   gap: 12px;
 }
 
-.main-grid.ascend-mode {
+.main-grid.full-width-mode {
   grid-template-columns: 1fr;
 }
 
-.main-grid.ascend-mode #lab-panel,
-.main-grid.ascend-mode #pinned-panel {
+.main-grid.full-width-mode #lab-panel,
+.main-grid.full-width-mode #pinned-panel {
   display: none;
+}
+
+.main-grid.expeditions-mode #dynamic-panel {
+  min-height: 520px;
 }
 
 .tabbar {
@@ -265,6 +269,358 @@ h1 {
   padding-right: 6px;
 }
 
+.expedition-progress {
+  margin: 10px 0 12px;
+  width: 100%;
+  height: 10px;
+  background: #f0e4cc;
+  border: 1px solid #dfcfb0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.expedition-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #d9531e 0%, #1d8f85 100%);
+}
+
+.expedition-subtabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.fleet-layout {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1.2fr 1fr;
+}
+
+.fleet-left,
+.fleet-right {
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: #fffdf7;
+  padding: 12px;
+}
+
+.ship-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ship-card {
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.ship-card.active {
+  border-color: #d9531e;
+  box-shadow: 0 0 0 2px rgba(217, 83, 30, 0.12);
+}
+
+.ship-card.locked {
+  opacity: 0.8;
+}
+
+.ship-card--minimal {
+  padding: 8px;
+  gap: 4px;
+}
+
+.ship-card--minimal .kv {
+  display: none;
+}
+
+.ship-graphic {
+  --ship-hull-start: #b5783f;
+  --ship-hull-end: #8a5d2b;
+  --ship-sail-top: rgba(255, 252, 240, 0.9);
+  --ship-sail-bottom: rgba(232, 220, 192, 0.78);
+  --ship-water-top: rgba(78, 126, 150, 0.15);
+  --ship-water-bottom: rgba(42, 82, 96, 0.26);
+  position: relative;
+  min-height: 240px;
+  border: 1px dashed #e7dbc3;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 250, 240, 0.6), rgba(246, 231, 200, 0.45));
+  overflow: hidden;
+}
+
+.ship-waterline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 42%;
+  background: linear-gradient(180deg, var(--ship-water-top), var(--ship-water-bottom));
+}
+
+.ship-hull {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 16%;
+  height: 80px;
+  background: linear-gradient(90deg, var(--ship-hull-start), var(--ship-hull-end));
+  border-radius: 60px 60px 24px 24px;
+  opacity: 0.34;
+}
+
+.ship-layer {
+  position: absolute;
+  pointer-events: none;
+}
+
+.ship-layer--mast {
+  left: 46%;
+  bottom: 30%;
+  width: 6px;
+  height: 42%;
+  background: linear-gradient(180deg, #7b5732, #5a3d1f);
+  border-radius: 6px;
+  opacity: 0.6;
+}
+
+.ship-layer--sails {
+  left: 42%;
+  bottom: 42%;
+  width: 84px;
+  height: 72px;
+  background: linear-gradient(180deg, var(--ship-sail-top), var(--ship-sail-bottom));
+  clip-path: polygon(0 0, 100% 18%, 62% 100%, 8% 86%);
+  opacity: 0.75;
+}
+
+.ship-graphic--raft .ship-hull {
+  left: 16%;
+  right: 18%;
+  bottom: 18%;
+  height: 62px;
+  background: linear-gradient(90deg, #a87339, #87582a);
+  border-radius: 42px 42px 16px 16px;
+}
+
+.ship-graphic--raft .ship-layer--mast {
+  left: 42%;
+  height: 34%;
+}
+
+.ship-graphic--sloop .ship-hull {
+  left: 14%;
+  right: 14%;
+  bottom: 18%;
+  height: 74px;
+  background: linear-gradient(90deg, #9a6b36, #744523);
+}
+
+.ship-graphic--brig .ship-hull {
+  left: 10%;
+  right: 12%;
+  bottom: 16%;
+  height: 90px;
+  background: linear-gradient(90deg, #8b5f34, #5b3720);
+}
+
+.ship-graphic--brig .ship-layer--sails {
+  width: 112px;
+  height: 82px;
+}
+
+.ship-graphic--galleon .ship-hull {
+  left: 8%;
+  right: 10%;
+  bottom: 14%;
+  height: 102px;
+  background: linear-gradient(90deg, #7e542f, #4d2f1b);
+}
+
+.ship-graphic--galleon .ship-layer--mast {
+  left: 44%;
+  height: 46%;
+}
+
+.ship-graphic--galleon .ship-layer--sails {
+  left: 39%;
+  width: 124px;
+  height: 92px;
+}
+
+.ship-zone {
+  position: absolute;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  min-width: 188px;
+  max-width: 240px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--card-border);
+  padding: 8px;
+  transition: box-shadow 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.ship-zone span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ship-zone-meta {
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: #6a5b43;
+}
+
+.ship-zone.active {
+  border-color: #d9531e;
+  box-shadow: 0 0 0 2px rgba(217, 83, 30, 0.12);
+}
+
+.ship-zone.drop-target {
+  border-color: #1d8f85;
+  box-shadow: 0 0 0 3px rgba(29, 143, 133, 0.18);
+}
+
+.ship-zone.drop-invalid {
+  border-color: #b03c2f;
+  box-shadow: 0 0 0 3px rgba(176, 60, 47, 0.2);
+}
+
+.ship-zone.drop-target,
+.ship-zone.drop-invalid,
+.ship-zone.active {
+  transform: translateY(-1px);
+}
+
+.ship-gui-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 14px;
+}
+
+.ship-gui-main,
+.ship-gui-inventory {
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: #fffdf7;
+  padding: 12px;
+}
+
+.ship-gui-main {
+  grid-column: 1;
+}
+
+.ship-gui-inventory {
+  grid-column: 1;
+}
+
+.ship-gui-main .ship-graphic {
+  min-height: 460px;
+  margin-bottom: 10px;
+}
+
+.inventory-list {
+  border: 1px dashed #e7dbc3;
+  border-radius: 10px;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.inventory-filters {
+  margin-bottom: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  border: 1px solid #d8c8ab;
+  background: #fdf8ec;
+  color: #5b4b34;
+}
+
+.chip--rarity {
+  background: #f5f0e4;
+}
+
+.chip--ship {
+  background: #e9f2f5;
+  border-color: #bfd4da;
+  color: #335a66;
+}
+
+.inventory-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px dashed #e7dbc3;
+  padding-bottom: 8px;
+  transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.inventory-list--parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.inventory-item--part {
+  border: 1px dashed #decdb0;
+  border-radius: 10px;
+  padding: 8px;
+  background: #fff;
+  min-height: 104px;
+}
+
+.inventory-item--equipped {
+  background: #fcf7eb;
+  border-radius: 8px;
+  border: 1px dashed #dfcfb0;
+  padding: 8px;
+}
+
+.inventory-item--equipped-empty {
+  border: 1px dashed #eadfc9;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.inventory-item[draggable="true"] {
+  cursor: grab;
+}
+
+.inventory-item.dragging {
+  opacity: 0.55;
+  background: #f8efde;
+  border-color: #d8c5a5;
+}
+
+.inventory-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
 button {
   font-family: inherit;
   border: 1px solid transparent;
@@ -272,6 +628,12 @@ button {
   padding: 8px 10px;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+button.compact {
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 0.78rem;
 }
 
 
@@ -357,6 +719,33 @@ button:disabled {
 @media (max-width: 860px) {
   .resource-grid {
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .fleet-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .ship-gui-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .ship-gui-main,
+  .ship-gui-inventory,
+  .ship-gui-layout .ship-cards {
+    grid-column: auto;
+  }
+
+  .ship-gui-main .ship-graphic {
+    min-height: 340px;
+  }
+
+  .ship-zone {
+    min-width: 150px;
+    font-size: 0.82rem;
+  }
+
+  .inventory-list--parts {
+    grid-template-columns: 1fr;
   }
 
   .resource-card {

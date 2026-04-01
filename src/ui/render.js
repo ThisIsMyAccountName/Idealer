@@ -40,6 +40,17 @@ function scaleDescription(text, scale) {
   });
 }
 
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  return `${minutes}:${String(rem).padStart(2, "0")}`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function createRenderer({ appEl, state, balance, generatorDefs, formulas, systems, saveSlots }) {
   const ui = {
     notice: "",
@@ -49,9 +60,17 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     panelEl: null,
     pinnedEl: null,
     ascendView: null,
+    expeditionsView: "runs",
+    fleetFocusSlot: "hull",
+    shipInventoryFilter: "compatible",
+    shipInventoryRarity: "all",
+    draggingPartId: "",
+    dragHoverSlot: "",
+    lastExpeditionSignature: "",
     scrollPositions: {
       upgrades: 0,
-      research: 0
+      research: 0,
+      expeditions: 0
     }
   };
 
@@ -64,6 +83,22 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
   function actionButton(label, className, action, disabled = false) {
     return `<button class="${className}" data-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`;
+  }
+
+  function formatCost(cost) {
+    if (!cost) {
+      return "Free";
+    }
+    const matter = Math.max(0, Number(cost.matter) || 0);
+    const fire = Math.max(0, Number(cost.fire) || 0);
+    const shards = Math.max(0, Number(cost.shards) || 0);
+    return `${formatNumber(matter)} Matter | ${formatNumber(fire)} Fire | ${formatNumber(shards)} Shards`;
+  }
+
+  function formatPartEffects(effects) {
+    return Object.entries(effects || {})
+      .map(([key, value]) => `${key} ${value >= 0 ? "+" : ""}${(Number(value) * 100).toFixed(1)}%`)
+      .join(" | ");
   }
 
   function buildLayout() {
@@ -122,6 +157,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       <section class="tabbar">
         ${actionButton("Upgrades", "ghost tab", "tab:upgrades")}
         ${actionButton("Research", "ghost tab", "tab:research")}
+        ${actionButton("Expeditions", "ghost tab", "tab:expeditions")}
         ${actionButton("Ascend", "ghost tab", "tab:ascend")}
       </section>
 
@@ -145,9 +181,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
   function renderPinnedPanel(rates) {
     return `
-      <h2>Overview</h2>
-      <div class="notice" id="notice"></div>
       ${renderOverviewPanel(rates)}
+      <div class="notice" id="notice"></div>
     `;
   }
 
@@ -336,12 +371,508 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     `;
   }
 
+  function getZoneStyleForShip(shipDef, slot) {
+    const fallback = {
+      hull: { left: 20, top: 72 },
+      sail: { left: 44, top: 24 },
+      anchor: { left: 78, top: 76 },
+      net: { left: 62, top: 48 }
+    };
+    const configured = shipDef?.visual?.zones?.[slot] || {};
+    const left = Number.isFinite(Number(configured.left)) ? Number(configured.left) : fallback[slot].left;
+    const top = Number.isFinite(Number(configured.top)) ? Number(configured.top) : fallback[slot].top;
+    return `style="left:${left}%; top:${top}%;"`;
+  }
+
+  function renderShipGraphic(shipStatus, selectedShipId, selectedShipState, selectedShipDef, selectedSlot, partDefs) {
+    const visual = selectedShipDef.visual || {};
+    const mastCount = Math.max(1, Math.min(3, Math.floor(Number(visual.mastCount) || 1)));
+    const mastOffsets = mastCount === 1
+      ? [46]
+      : mastCount === 2
+        ? [40, 56]
+        : [34, 50, 66];
+    const palette = visual.palette || {};
+    const paletteStyle = [
+      palette.hullStart ? `--ship-hull-start:${palette.hullStart};` : "",
+      palette.hullEnd ? `--ship-hull-end:${palette.hullEnd};` : "",
+      palette.sailTop ? `--ship-sail-top:${palette.sailTop};` : "",
+      palette.sailBottom ? `--ship-sail-bottom:${palette.sailBottom};` : "",
+      palette.waterTop ? `--ship-water-top:${palette.waterTop};` : "",
+      palette.waterBottom ? `--ship-water-bottom:${palette.waterBottom};` : ""
+    ].join("");
+    const zones = ["hull", "sail", "anchor", "net"]
+      .map((slot) => {
+        const active = selectedSlot === slot ? " active" : "";
+        const label = slot[0].toUpperCase() + slot.slice(1);
+        const equippedId = selectedShipState.equippedParts?.[slot];
+        const equippedPart = equippedId && partDefs[equippedId] ? partDefs[equippedId] : null;
+        const equippedName = equippedPart ? equippedPart.name : "None";
+        const effectsText = equippedPart ? formatPartEffects(equippedPart.effects || {}) : "Drop compatible part here";
+        const zoneStyle = getZoneStyleForShip(selectedShipDef, slot);
+        return `
+          <button class="ship-zone${active}" data-action="ship:focus:${slot}" data-slot="${slot}" data-ship-id="${selectedShipId}" ${zoneStyle}>
+            <strong>${label}</strong>
+            <span>${equippedName}</span>
+            <span class="ship-zone-meta">${effectsText || "No stat modifiers."}</span>
+          </button>
+        `;
+      })
+      .join("");
+    const masts = mastOffsets
+      .map((offset) => `<div class="ship-layer ship-layer--mast" style="left:${offset}%;"></div>`)
+      .join("");
+
+    const theme = selectedShipDef.visual?.theme || selectedShipId || "raft";
+    return `
+      <div class="ship-graphic ship-graphic--${theme}" style="${paletteStyle}">
+        <div class="ship-waterline"></div>
+        <div class="ship-hull"></div>
+        ${masts}
+        <div class="ship-layer ship-layer--sails"></div>
+        ${zones}
+      </div>
+    `;
+  }
+
+  function renderFleetDockPanel() {
+    const shipStatus = systems.ships.getStatus();
+    const shipDefs = shipStatus.shipDefs || {};
+    const ships = shipStatus.ships || {};
+    const facilityDefs = shipStatus.facilityDefs || {};
+
+    const selectedShipId = shipStatus.selectedShip;
+    const selectedShipState = ships[selectedShipId] || {};
+    const selectedShipDef = shipDefs[selectedShipId] || {};
+    const selectedShipStats = systems.ships.getShipStats(selectedShipId) || null;
+
+    const shipCards = Object.values(shipDefs)
+      .map((def) => {
+        const ship = ships[def.id] || {};
+        const acquired = Boolean(ship.acquired);
+        const selected = def.id === selectedShipId;
+        const unlock = systems.ships.isShipUnlockMet(def.id);
+        const classNames = ["ship-card"];
+        if (selected) {
+          classNames.push("active");
+        }
+        if (!acquired) {
+          classNames.push("locked");
+        }
+        const action = acquired ? `ship:select:${def.id}` : `ship:buy:${def.id}`;
+        const actionText = acquired ? (selected ? "Selected" : "Select") : "Buy";
+        const disabled = acquired ? selected : !unlock.ok;
+
+        return `
+          <div class="ship-card-wrap">
+            <div class="${classNames.join(" ")}">
+              <div><strong>${def.name}</strong></div>
+              <div class="kv">Base: Speed x${(def.baseStats?.speedMultiplier || 1).toFixed(2)} | Risk Mit +${((def.baseStats?.riskMitigation || 0) * 100).toFixed(1)}%</div>
+              <div class="kv">Yield x${(def.baseStats?.yieldMultiplier || 1).toFixed(2)} | Rare x${(def.baseStats?.rareDropWeight || 1).toFixed(2)}</div>
+              ${acquired ? "<div class=\"kv\">Owned</div>" : `<div class="kv">Cost: ${formatCost(def.purchaseCost)}</div>`}
+              ${!acquired && !unlock.ok ? `<div class="kv">${unlock.reason}</div>` : ""}
+              ${actionButton(actionText, acquired ? "ghost" : "secondary", action, disabled)}
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    const facilityRows = Object.entries(facilityDefs)
+      .map(([facilityId, def]) => {
+        const level = Math.max(0, Math.floor(Number(selectedShipState.facilities?.[facilityId]) || 0));
+        const maxLevel = def.maxLevel || 0;
+        const maxed = level >= maxLevel;
+        const nextCost = def.levelCosts?.[level];
+        const disabled = maxed || !selectedShipState.acquired;
+        const effectParts = [];
+        if (def.effectsPerLevel?.speedMultiplier) {
+          effectParts.push(`+${(def.effectsPerLevel.speedMultiplier * 100).toFixed(1)}% speed/lv`);
+        }
+        if (def.effectsPerLevel?.yieldMultiplier) {
+          effectParts.push(`+${(def.effectsPerLevel.yieldMultiplier * 100).toFixed(1)}% yield/lv`);
+        }
+        if (def.effectsPerLevel?.riskMitigation) {
+          effectParts.push(`+${(def.effectsPerLevel.riskMitigation * 100).toFixed(1)}% risk mit/lv`);
+        }
+        if (def.effectsPerLevel?.penaltyDampening) {
+          effectParts.push(`+${(def.effectsPerLevel.penaltyDampening * 100).toFixed(1)}% penalty damp/lv`);
+        }
+        if (def.effectsPerLevel?.rareDropWeight) {
+          effectParts.push(`+${(def.effectsPerLevel.rareDropWeight * 100).toFixed(1)}% rare weight/lv`);
+        }
+
+        return `
+          <div class="row">
+            <div>
+              <div><strong>${def.label}</strong> Lv.${level}/${maxLevel}</div>
+              <div class="kv">${effectParts.join(" | ")}</div>
+              <div class="kv">${maxed ? "Maxed" : `Next cost: ${formatCost(nextCost)}`}</div>
+            </div>
+            ${actionButton("Upgrade", "ghost", `ship:upgrade:${selectedShipId}:${facilityId}`, disabled)}
+          </div>
+        `;
+      })
+      .join("");
+    const blueprintRows = Object.entries(shipStatus.blueprintInventory || {})
+      .filter(([, count]) => Number(count) > 0)
+      .map(([id, count]) => `<div class="kv">${id} x${count}</div>`)
+      .join("");
+
+    return `
+      <h2>Fleet Dock</h2>
+      <div class="fleet-layout">
+        <section class="fleet-left">
+          <div class="ship-cards">${shipCards}</div>
+          <div class="kv">Selected: <strong>${selectedShipDef.name || selectedShipId}</strong>${selectedShipStats ? ` | Speed x${selectedShipStats.speedMultiplier.toFixed(2)} | Risk Mit +${(selectedShipStats.riskMitigation * 100).toFixed(1)}% | Yield x${selectedShipStats.yieldMultiplier.toFixed(2)} | Rare x${selectedShipStats.rareDropWeight.toFixed(2)}` : ""}</div>
+          <div class="kv">Use the Ships subtab for interactive slot management and part inventory.</div>
+        </section>
+        <section class="fleet-right">
+          <h3>Facility Upgrades</h3>
+          <div class="scroll-panel">${facilityRows}</div>
+          <h3>Blueprint Ledger</h3>
+          <div class="inventory-list">${blueprintRows || "<div class=\"kv\">No blueprints discovered yet.</div>"}</div>
+        </section>
+      </div>
+    `;
+  }
+
+  function renderShipGuiPanel() {
+    const shipStatus = systems.ships.getStatus();
+    const shipDefs = shipStatus.shipDefs || {};
+    const ships = shipStatus.ships || {};
+    const partDefs = shipStatus.partDefs || {};
+
+    const selectedShipId = shipStatus.selectedShip;
+    const selectedShipState = ships[selectedShipId] || {};
+    const selectedShipDef = shipDefs[selectedShipId] || {};
+    const selectedShipStats = systems.ships.getShipStats(selectedShipId) || null;
+    const selectedSlot = ui.fleetFocusSlot;
+    const equippedPartCounts = shipStatus.equippedPartCounts || {};
+    const allPartItems = Object.entries(shipStatus.partInventory || {})
+      .filter(([, count]) => Number(count) > 0)
+      .map(([partId, count]) => {
+        const def = partDefs[partId];
+        if (!def) {
+          return null;
+        }
+        const equippedCount = Number(equippedPartCounts[partId]) || 0;
+        const availableCount = Math.max(0, Number(count) - equippedCount);
+        return {
+          partId,
+          count: Number(count),
+          equippedCount,
+          availableCount,
+          def,
+          compatibleWithSelectedShip: !def.shipId || def.shipId === selectedShipId,
+          compatibleWithFocusSlot: def.slot === selectedSlot
+        };
+      })
+      .filter(Boolean);
+
+    const hoverSlot = ui.dragHoverSlot || "";
+    const filterMode = ui.shipInventoryFilter || "compatible";
+    const rarityFilter = ui.shipInventoryRarity || "all";
+    const filteredPartItems = allPartItems
+      .filter((item) => {
+        if (rarityFilter !== "all" && (item.def.rarity || "rare") !== rarityFilter) {
+          return false;
+        }
+        if (filterMode === "all") {
+          return true;
+        }
+        if (filterMode === "ship") {
+          return item.compatibleWithSelectedShip;
+        }
+        if (filterMode === "hovered") {
+          if (!hoverSlot) {
+            return false;
+          }
+          return item.compatibleWithSelectedShip && item.def.slot === hoverSlot;
+        }
+        return item.compatibleWithSelectedShip && item.compatibleWithFocusSlot;
+      });
+
+    const inventoryRows = filteredPartItems.length > 0
+      ? filteredPartItems.map((item) => {
+        const encoded = encodeURIComponent(item.partId);
+        const effectText = formatPartEffects(item.def.effects || {});
+        const rarity = item.def.rarity || "rare";
+        const canEquipByCount = item.availableCount > 0 || selectedShipState.equippedParts?.[selectedSlot] === item.partId;
+        const canEquipByFilter = item.compatibleWithSelectedShip && item.compatibleWithFocusSlot;
+        const canEquip = canEquipByCount && canEquipByFilter;
+        const equippedBadge = item.equippedCount > 0 ? `<span class="chip">Equipped ${item.equippedCount}</span>` : "";
+        const shipBadge = item.def.shipId ? `<span class="chip chip--ship">${item.def.shipId}</span>` : "";
+        return `
+          <div class="inventory-item inventory-item--part" draggable="true" data-part-id="${item.partId}" data-slot="${item.def.slot}" data-ship-id="${selectedShipId}">
+            <div>
+              <div><strong>${item.def.name}</strong> x${item.count} <span class="kv">(${item.availableCount} free)</span></div>
+              <div class="chip-row"><span class="chip chip--rarity">${rarity}</span><span class="chip">${item.def.slot}</span>${shipBadge}${equippedBadge}</div>
+              <div class="kv">${effectText || "No stat modifiers."}</div>
+            </div>
+            ${actionButton("Equip", "secondary compact", `ship:equip:${selectedShipId}:${selectedSlot}:${encoded}`, !canEquip)}
+          </div>
+        `;
+      }).join("")
+      : "<div class=\"kv\">No parts match the active filters.</div>";
+
+    const rarityOptions = ["all", "semi-rare", "rare", "epic"];
+    const filterButtons = [
+      { id: "compatible", label: "Focus Slot" },
+      { id: "ship", label: "Current Ship" },
+      { id: "hovered", label: "Hovered Slot" },
+      { id: "all", label: "All" }
+    ]
+      .map((filter) => actionButton(
+        filter.label,
+        `ghost compact ${filterMode === filter.id ? "active" : ""}`,
+        `ship:filter:${filter.id}`,
+        filter.id === "hovered" && !hoverSlot
+      ))
+      .join("");
+    const rarityButtons = rarityOptions
+      .map((rarity) => actionButton(
+        rarity === "all" ? "Any Rarity" : rarity,
+        `ghost compact ${rarityFilter === rarity ? "active" : ""}`,
+        `ship:rarity:${rarity}`
+      ))
+      .join("");
+
+    return `
+      <h2>Ships</h2>
+      <div class="ship-gui-layout">
+        <section class="ship-gui-main">
+          ${renderShipGraphic(shipStatus, selectedShipId, selectedShipState, selectedShipDef, selectedSlot, partDefs)}
+          <div class="kv">${selectedShipDef.name || selectedShipId} | Speed x${selectedShipStats ? selectedShipStats.speedMultiplier.toFixed(2) : "1.00"} | Risk Mit +${selectedShipStats ? (selectedShipStats.riskMitigation * 100).toFixed(1) : "0.0"}% | Yield x${selectedShipStats ? selectedShipStats.yieldMultiplier.toFixed(2) : "1.00"} | Rare x${selectedShipStats ? selectedShipStats.rareDropWeight.toFixed(2) : "1.00"}</div>
+        </section>
+        <section class="ship-gui-inventory">
+          <h3>Part Inventory</h3>
+          <div class="inventory-filters">
+            <div class="chip-row">${filterButtons}</div>
+            <div class="chip-row">${rarityButtons}</div>
+            <div class="kv">Focus slot: ${selectedSlot} ${hoverSlot ? `| Hover slot: ${hoverSlot}` : ""}</div>
+          </div>
+          <div class="inventory-list inventory-list--parts">${inventoryRows}</div>
+        </section>
+      </div>
+    `;
+  }
+
+  function renderExpeditionsPanel() {
+    const expeditionStatus = systems.expeditions.getStatus();
+    const unlockNodeId = expeditionStatus.unlockNodeId;
+    const unlockNodeOwned = unlockNodeId ? systems.ascendTree.hasNode(unlockNodeId) : true;
+    const shipStats = expeditionStatus.selectedShipStats;
+    const shipLine = expeditionStatus.selectedShip
+      ? `<div class="kv">Ship: ${expeditionStatus.selectedShip.toUpperCase()}${shipStats ? ` | Speed x${shipStats.speedMultiplier.toFixed(2)} | Risk Mit +${(shipStats.riskMitigation * 100).toFixed(1)}% | Yield x${shipStats.yieldMultiplier.toFixed(2)}` : ""}</div>`
+      : "<div class=\"kv\">No ship selected.</div>";
+    const subTabs = `
+      <div class="expedition-subtabs">
+        ${actionButton("Runs", `ghost ${ui.expeditionsView === "runs" ? "active" : ""}`, "expedition:view:runs")}
+        ${actionButton("Fleet Dock", `ghost ${ui.expeditionsView === "fleet" ? "active" : ""}`, "expedition:view:fleet")}
+        ${actionButton("Ships", `ghost ${ui.expeditionsView === "ship" ? "active" : ""}`, "expedition:view:ship")}
+      </div>
+    `;
+
+    if (ui.expeditionsView === "fleet") {
+      return `${subTabs}${renderFleetDockPanel()}`;
+    }
+
+    if (ui.expeditionsView === "ship") {
+      return `${subTabs}${renderShipGuiPanel()}`;
+    }
+
+    const metaRows = `
+      <div class="row">
+        <div><strong>Intel</strong></div>
+        <div class="kv">${formatNumber(expeditionStatus.meta.intel || 0)}</div>
+      </div>
+      <div class="row">
+        <div><strong>Completed Runs</strong></div>
+        <div class="kv">${formatNumber(expeditionStatus.meta.completedRuns || 0)}</div>
+      </div>
+      <div class="row">
+        <div><strong>Failed Runs</strong></div>
+        <div class="kv">${formatNumber(expeditionStatus.meta.failedRuns || 0)}</div>
+      </div>
+      <div class="row">
+        <div><strong>Best Band</strong></div>
+        <div class="kv">${formatNumber(expeditionStatus.meta.bestBand || 0)}</div>
+      </div>
+    `;
+
+    if (!unlockNodeOwned) {
+      return `
+        ${subTabs}
+        <h2>Prestige Expeditions</h2>
+        ${shipLine}
+        <div class="muted">Expeditions are prestige-first content. Unlock <strong>Expedition Keystone</strong> in Ascend to begin.</div>
+        ${metaRows}
+      `;
+    }
+
+    if (expeditionStatus.pendingRewards) {
+      const pending = expeditionStatus.pendingRewards;
+      const rewards = pending.rewards || {};
+      const outcome = pending.success ? "Success" : "Failure";
+      const routeSummary = (pending.routeHistory || [])
+        .map((step) => step.name)
+        .join(" -> ");
+      const encounterSummary = (pending.encounters || [])
+        .slice(-2)
+        .map((entry) => `${entry.name} (${entry.success ? "stabilized" : "breach"})`)
+        .join(" | ");
+      const dropSummary = (pending.drops || [])
+        .map((drop) => drop.name)
+        .join(" | ");
+      return `
+        ${subTabs}
+        <h2>Prestige Expeditions</h2>
+        ${shipLine}
+        <div class="row">
+          <div>
+            <div><strong>${pending.bandName}</strong> resolved: ${outcome}</div>
+            <div class="kv">Claim: +${formatNumber(rewards.matter || 0)} Matter, +${formatNumber(rewards.fire || 0)} Fire, +${formatNumber(rewards.shards || 0)} Shards, +${formatNumber(rewards.intel || 0)} Intel</div>
+            ${routeSummary ? `<div class="kv">Route: ${routeSummary}</div>` : ""}
+            ${encounterSummary ? `<div class="kv">Encounters: ${encounterSummary}</div>` : ""}
+            ${dropSummary ? `<div class="kv">Rare Finds: ${dropSummary}</div>` : ""}
+          </div>
+          ${actionButton("Claim Rewards", "primary", "expedition:claim")}
+        </div>
+        ${metaRows}
+      `;
+    }
+
+    if (expeditionStatus.activeRun) {
+      const run = expeditionStatus.activeRun;
+      const segmentProgressRaw = run.segmentDurationSeconds > 0
+        ? run.segmentElapsedSeconds / run.segmentDurationSeconds
+        : 0;
+      const segmentProgress = Math.max(0, Math.min(1, segmentProgressRaw));
+      const completedStages = run.awaitingChoice ? run.stageIndex : run.stageIndex + segmentProgress;
+      const totalProgressRaw = run.stageCount > 0 ? completedStages / run.stageCount : 0;
+      const progress = Math.max(0, Math.min(100, totalProgressRaw * 100));
+      const band = expeditionStatus.bands.find((item) => item.id === run.bandId);
+      const shipRiskMitigation = run.ship?.stats?.riskMitigation || 0;
+      const totalMitigation = clamp((state.perks.expeditionRiskMitigation || 0) + shipRiskMitigation, 0, 0.8);
+      const currentRisk = clamp((band?.risk || 0) + (run.modifiers?.riskDelta || 0), 0.04, 0.98);
+      const mitigatedRisk = currentRisk * (1 - totalMitigation);
+      const routeRows = (run.routeHistory || [])
+        .slice(-3)
+        .map((item) => `<div class="kv">Stage ${item.stage}: ${item.name}</div>`)
+        .join("");
+      const encounterRows = (run.encounterLog || [])
+        .slice(-2)
+        .map((entry) => `<div class="kv">${entry.name}: ${entry.success ? "stabilized" : "breach"}</div>`)
+        .join("");
+      const dropRows = (run.pendingDrops || [])
+        .slice(-2)
+        .map((drop) => `<div class="kv">Rare find secured: ${drop.name}</div>`)
+        .join("");
+
+      const choicePanel = run.awaitingChoice
+        ? `
+          <div class="row">
+            <div>
+              <div><strong>Route Decision Required</strong></div>
+              <div class="kv">Choose a branch for stage ${Math.min(run.stageIndex + 1, run.stageCount)}.</div>
+            </div>
+          </div>
+          <div class="scroll-panel">
+            ${(run.pendingChoices || [])
+              .map((choice) => {
+                const risk = Number(choice.riskDelta) || 0;
+                const yieldDelta = Number(choice.yieldDelta) || 0;
+                const riskText = `${risk >= 0 ? "+" : ""}${(risk * 100).toFixed(1)}% risk`;
+                const yieldText = `${yieldDelta >= 0 ? "+" : ""}${(yieldDelta * 100).toFixed(1)}% yield`;
+                const projectedRisk = clamp(currentRisk + risk, 0.04, 0.98);
+                const projectedMitigatedRisk = projectedRisk * (1 - totalMitigation);
+                const routeLine = choice.encounterPool
+                  ? `<div class="kv">Encounter profile: ${choice.encounterPool}</div>`
+                  : "";
+                const lockLine = choice.unlocked
+                  ? ""
+                  : `<div class="kv">${choice.lockReason || "Locked by prestige requirements."}</div>`;
+                return `
+                  <div class="row">
+                    <div>
+                      <div><strong>${choice.name}</strong></div>
+                      <div class="kv">${choice.description || ""}</div>
+                      <div class="kv">${riskText} | ${yieldText}</div>
+                      <div class="kv">Projected risk: ${(projectedRisk * 100).toFixed(1)}% (mitigated ${(projectedMitigatedRisk * 100).toFixed(1)}%)</div>
+                      ${routeLine}
+                      ${lockLine}
+                    </div>
+                    ${actionButton("Commit", "secondary", `expedition:route:${choice.id}`, !choice.unlocked)}
+                  </div>
+                `;
+              })
+              .join("")}
+          </div>
+        `
+        : "";
+
+      return `
+        ${subTabs}
+        <h2>Prestige Expeditions</h2>
+        ${shipLine}
+        <div class="row">
+          <div>
+            <div><strong>${band?.name || run.bandId}</strong> in progress</div>
+            <div class="kv" id="expedition-stage-text">Stage ${Math.min(run.stageIndex + 1, run.stageCount)} / ${run.stageCount} | ${progress.toFixed(1)}% total</div>
+            <div class="kv" id="expedition-segment-text">Segment: ${formatDuration(run.segmentElapsedSeconds || 0)} / ${formatDuration(run.segmentDurationSeconds || 0)}</div>
+            <div class="kv">Current risk: ${(currentRisk * 100).toFixed(1)}% (mitigated ${(mitigatedRisk * 100).toFixed(1)}%)</div>
+            ${routeRows}
+            ${encounterRows}
+            ${dropRows}
+          </div>
+          ${actionButton("Abandon", "ghost", "expedition:abandon")}
+        </div>
+        <div class="expedition-progress"><span id="expedition-progress-fill" style="width:${Math.max(2, progress).toFixed(1)}%"></span></div>
+        ${choicePanel}
+        ${metaRows}
+      `;
+    }
+
+    const bandRows = expeditionStatus.bands
+      .map((band) => {
+        const cost = band.cost || {};
+        const disabled = !band.unlock.ok;
+        const requirements = disabled ? `<div class="kv">${band.unlock.reason}</div>` : "";
+        return `
+          <div class="row">
+            <div>
+              <div><strong>Band ${band.rank}: ${band.name}</strong></div>
+              <div class="kv">${band.description}</div>
+              <div class="kv">Cost: ${formatNumber(cost.matter || 0)} Matter | ${formatNumber(cost.fire || 0)} Fire | ${formatNumber(cost.shards || 0)} Shards</div>
+              <div class="kv">Duration: ${formatDuration(band.durationSeconds || 0)} | Risk: ${((band.risk || 0) * 100).toFixed(1)}%</div>
+              <div class="kv">Stages: ${Math.max(1, band.stageCount || 1)} | Branching route decisions each stage</div>
+              ${requirements}
+            </div>
+            ${actionButton("Launch", "ghost", `expedition:start:${band.id}`, disabled)}
+          </div>
+        `;
+      })
+      .join("");
+
+    return `
+      ${subTabs}
+      <h2>Prestige Expeditions</h2>
+      ${shipLine}
+      <div class="muted">Launch a run, wait for resolution, then claim rewards. Ascension nodes control your depth and safety.</div>
+      <div class="scroll-panel">${bandRows}${metaRows}</div>
+    `;
+  }
+
   function renderTabPanel(rates) {
     if (ui.activeTab === "upgrades") {
       return renderUpgradesPanel();
     }
     if (ui.activeTab === "research") {
       return renderResearchPanel();
+    }
+    if (ui.activeTab === "expeditions") {
+      return renderExpeditionsPanel();
     }
     if (ui.activeTab === "ascend") {
       return renderAscendPanel();
@@ -359,7 +890,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
   function renderPanel() {
     const rates = formulas.productionPerSecond(state, generatorDefs);
-    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research")) {
+    const isAscendTab = ui.activeTab === "ascend";
+    const isExpeditionsTab = ui.activeTab === "expeditions";
+    const isFullWidthTab = isAscendTab || isExpeditionsTab;
+    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions")) {
       const currentScroll = ui.panelEl.querySelector(".scroll-panel");
       if (currentScroll) {
         ui.scrollPositions[ui.activeTab] = currentScroll.scrollTop;
@@ -371,22 +905,74 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     }
     ui.panelEl.innerHTML = renderTabPanel(rates);
     applyTabActiveState();
-    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research")) {
+    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions")) {
       const nextScroll = ui.panelEl.querySelector(".scroll-panel");
       if (nextScroll) {
         nextScroll.scrollTop = ui.scrollPositions[ui.activeTab] || 0;
       }
     }
-    if (ui.activeTab === "ascend") {
+    refs.mainGrid.classList.toggle("full-width-mode", isFullWidthTab);
+    refs.mainGrid.classList.toggle("expeditions-mode", isExpeditionsTab);
+    if (isAscendTab) {
       refs.mainGrid.classList.add("ascend-mode");
       setupAscendInteractions();
     } else {
       refs.mainGrid.classList.remove("ascend-mode");
     }
+    ui.lastExpeditionSignature = getExpeditionRenderSignature();
   }
 
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
+  function getExpeditionRenderSignature() {
+    const status = systems.expeditions.getStatus();
+    const run = status.activeRun;
+    const pending = status.pendingRewards;
+    return [
+      ui.expeditionsView,
+      status.selectedShip || "",
+      run ? "active" : "inactive",
+      run?.bandId || "",
+      run?.stageIndex ?? -1,
+      run?.awaitingChoice ? 1 : 0,
+      run?.pendingChoices?.length ?? 0,
+      run?.routeHistory?.length ?? 0,
+      run?.encounterLog?.length ?? 0,
+      run?.pendingDrops?.length ?? 0,
+      pending ? "pending" : "no-pending",
+      pending?.drops?.length ?? 0
+    ].join("|");
+  }
+
+  function refreshExpeditionLiveState() {
+    if (ui.activeTab !== "expeditions" || ui.expeditionsView !== "runs") {
+      return;
+    }
+    const status = systems.expeditions.getStatus();
+    const run = status.activeRun;
+    if (!run || run.awaitingChoice) {
+      return;
+    }
+
+    const segmentProgressRaw = run.segmentDurationSeconds > 0
+      ? run.segmentElapsedSeconds / run.segmentDurationSeconds
+      : 0;
+    const segmentProgress = Math.max(0, Math.min(1, segmentProgressRaw));
+    const completedStages = run.stageIndex + segmentProgress;
+    const totalProgressRaw = run.stageCount > 0 ? completedStages / run.stageCount : 0;
+    const progress = Math.max(0, Math.min(100, totalProgressRaw * 100));
+
+    const stageEl = ui.panelEl.querySelector("#expedition-stage-text");
+    const segmentEl = ui.panelEl.querySelector("#expedition-segment-text");
+    const progressEl = ui.panelEl.querySelector("#expedition-progress-fill");
+
+    if (stageEl) {
+      stageEl.textContent = `Stage ${Math.min(run.stageIndex + 1, run.stageCount)} / ${run.stageCount} | ${progress.toFixed(1)}% total`;
+    }
+    if (segmentEl) {
+      segmentEl.textContent = `Segment: ${formatDuration(run.segmentElapsedSeconds || 0)} / ${formatDuration(run.segmentDurationSeconds || 0)}`;
+    }
+    if (progressEl) {
+      progressEl.style.width = `${Math.max(2, progress).toFixed(1)}%`;
+    }
   }
 
   function setupAscendInteractions() {
@@ -549,6 +1135,78 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         renderPanel();
       } else if (action.startsWith("tab:")) {
         ui.activeTab = action.split(":")[1];
+        if (ui.activeTab === "expeditions" && !ui.expeditionsView) {
+          ui.expeditionsView = "runs";
+        }
+        renderPanel();
+      } else if (action.startsWith("expedition:view:")) {
+        ui.expeditionsView = action.split(":")[2] || "runs";
+        renderPanel();
+      } else if (action.startsWith("expedition:start:")) {
+        const bandId = action.split(":")[2];
+        const result = systems.expeditions.start(bandId);
+        setNotice(result.ok ? "Expedition launched." : result.reason, result.ok);
+        renderPanel();
+      } else if (action === "expedition:claim") {
+        const result = systems.expeditions.claim();
+        const dropCount = Array.isArray(result.drops) ? result.drops.length : 0;
+        const claimNotice = result.ok
+          ? (dropCount > 0 ? `Expedition rewards claimed. ${dropCount} rare find(s) secured.` : "Expedition rewards claimed.")
+          : result.reason;
+        setNotice(claimNotice, result.ok);
+        renderPanel();
+      } else if (action === "expedition:abandon") {
+        const result = systems.expeditions.abandon();
+        setNotice(result.ok ? "Expedition abandoned." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("expedition:route:")) {
+        const choiceId = action.split(":")[2];
+        const result = systems.expeditions.chooseRoute(choiceId);
+        const notice = result.ok
+          ? (result.encounter ? `Route locked. Encounter: ${result.encounter.name}.` : "Route locked.")
+          : result.reason;
+        setNotice(notice, result.ok);
+        renderPanel();
+      } else if (action.startsWith("ship:select:")) {
+        const shipId = action.split(":")[2];
+        const result = systems.ships.selectShip(shipId);
+        setNotice(result.ok ? "Ship selected." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("ship:buy:")) {
+        const shipId = action.split(":")[2];
+        const result = systems.ships.buyShip(shipId);
+        setNotice(result.ok ? "Ship purchased." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("ship:focus:")) {
+        ui.fleetFocusSlot = action.split(":")[2] || "hull";
+        ui.shipInventoryFilter = "compatible";
+        ui.dragHoverSlot = "";
+        renderPanel();
+      } else if (action.startsWith("ship:filter:")) {
+        ui.shipInventoryFilter = action.split(":")[2] || "compatible";
+        renderPanel();
+      } else if (action.startsWith("ship:rarity:")) {
+        ui.shipInventoryRarity = action.split(":")[2] || "all";
+        renderPanel();
+      } else if (action.startsWith("ship:upgrade:")) {
+        const shipId = action.split(":")[2];
+        const facilityId = action.split(":")[3];
+        const result = systems.ships.upgradeFacility(shipId, facilityId);
+        setNotice(result.ok ? "Facility upgraded." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("ship:equip:")) {
+        const shipId = action.split(":")[2];
+        const slotId = action.split(":")[3];
+        const encodedPartId = action.split(":")[4] || "";
+        const partId = decodeURIComponent(encodedPartId);
+        const result = systems.ships.equipPart(shipId, slotId, partId);
+        setNotice(result.ok ? "Part equipped." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("ship:unequip:")) {
+        const shipId = action.split(":")[2];
+        const slotId = action.split(":")[3];
+        const result = systems.ships.unequipPart(shipId, slotId);
+        setNotice(result.ok ? "Part unequipped." : result.reason, result.ok);
         renderPanel();
       } else if (action.startsWith("ascend:")) {
         const nodeId = action.split(":")[1];
@@ -559,6 +1217,122 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         saveSlots.onReset(saveSlots.activeSlotId);
       }
 
+      refreshHud();
+    });
+
+    function clearShipDropTargets() {
+      appEl.querySelectorAll(".ship-zone.drop-target, .ship-zone.drop-invalid").forEach((zoneEl) => {
+        zoneEl.classList.remove("drop-target", "drop-invalid");
+      });
+    }
+
+    function getDraggedPartDef() {
+      if (!ui.draggingPartId) {
+        return null;
+      }
+      return systems.ships.getStatus().partDefs?.[ui.draggingPartId] || null;
+    }
+
+    appEl.addEventListener("dragstart", (event) => {
+      const itemEl = event.target.closest(".inventory-item[data-part-id]");
+      if (!itemEl) {
+        return;
+      }
+      ui.draggingPartId = itemEl.dataset.partId || "";
+      const sourceShipId = itemEl.dataset.shipId || systems.ships.getStatus().selectedShip;
+      const payload = JSON.stringify({
+        partId: ui.draggingPartId,
+        slotId: itemEl.dataset.slot || "",
+        shipId: sourceShipId
+      });
+      event.dataTransfer?.setData("text/plain", payload);
+      event.dataTransfer.effectAllowed = "move";
+      itemEl.classList.add("dragging");
+    });
+
+    appEl.addEventListener("dragend", (event) => {
+      const itemEl = event.target.closest(".inventory-item.dragging");
+      if (itemEl) {
+        itemEl.classList.remove("dragging");
+      }
+      ui.draggingPartId = "";
+      ui.dragHoverSlot = "";
+      clearShipDropTargets();
+    });
+
+    appEl.addEventListener("dragover", (event) => {
+      const zoneEl = event.target.closest(".ship-zone[data-slot]");
+      if (!zoneEl || !ui.draggingPartId) {
+        return;
+      }
+      const partDef = getDraggedPartDef();
+      const slotId = zoneEl.dataset.slot || "";
+      const shipId = zoneEl.dataset.shipId || systems.ships.getStatus().selectedShip;
+      const compatible = Boolean(partDef) && partDef.slot === slotId && (!partDef.shipId || partDef.shipId === shipId);
+      ui.dragHoverSlot = slotId;
+      clearShipDropTargets();
+      zoneEl.classList.add(compatible ? "drop-target" : "drop-invalid");
+      if (compatible) {
+        event.preventDefault();
+      }
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = compatible ? "move" : "none";
+      }
+    });
+
+    appEl.addEventListener("dragleave", (event) => {
+      const zoneEl = event.target.closest(".ship-zone[data-slot]");
+      if (!zoneEl) {
+        return;
+      }
+      ui.dragHoverSlot = "";
+      zoneEl.classList.remove("drop-target", "drop-invalid");
+    });
+
+    appEl.addEventListener("drop", (event) => {
+      const zoneEl = event.target.closest(".ship-zone[data-slot]");
+      if (!zoneEl) {
+        return;
+      }
+      event.preventDefault();
+      let payload = null;
+      const rawData = event.dataTransfer?.getData("text/plain") || "";
+      if (rawData) {
+        try {
+          payload = JSON.parse(rawData);
+        } catch {
+          payload = null;
+        }
+      }
+
+      const partId = payload?.partId || ui.draggingPartId;
+      const shipId = zoneEl.dataset.shipId || payload?.shipId || systems.ships.getStatus().selectedShip;
+      const slotId = zoneEl.dataset.slot || "";
+      const partDef = systems.ships.getStatus().partDefs?.[partId] || null;
+      clearShipDropTargets();
+      ui.draggingPartId = "";
+      ui.dragHoverSlot = "";
+
+      if (!partId || !shipId || !slotId) {
+        return;
+      }
+
+      if (!partDef) {
+        setNotice("Unknown part selected.", false);
+        return;
+      }
+      if (partDef.slot !== slotId) {
+        setNotice(`That part fits ${partDef.slot}, not ${slotId}.`, false);
+        return;
+      }
+      if (partDef.shipId && partDef.shipId !== shipId) {
+        setNotice(`That part is restricted to ${partDef.shipId}.`, false);
+        return;
+      }
+
+      const result = systems.ships.equipPart(shipId, slotId, partId);
+      setNotice(result.ok ? "Part equipped." : result.reason, result.ok);
+      renderPanel();
       refreshHud();
     });
 
@@ -606,6 +1380,16 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     refs.notice.textContent = ui.notice;
     refs.notice.classList.toggle("good", ui.good);
+
+    if (ui.activeTab === "expeditions") {
+      const nextSignature = getExpeditionRenderSignature();
+      if (nextSignature !== ui.lastExpeditionSignature) {
+        ui.lastExpeditionSignature = nextSignature;
+        renderPanel();
+      } else {
+        refreshExpeditionLiveState();
+      }
+    }
   }
 
   return { start, setNotice, refreshHud };

@@ -54,7 +54,7 @@ export function saveState(state, slotId = getActiveSlot()) {
   localStorage.setItem(slotKey(slotId), JSON.stringify(payload));
 }
 
-export function applyOfflineProgress(state, balance, resourceManager, generatorDefs, formulas) {
+export function applyOfflineProgress(state, balance, resourceManager, generatorDefs, formulas, onAdvanceOffline) {
   const now = Date.now();
   if (state.meta?.offlineEligible === false) {
     state.meta.lastTickAt = now;
@@ -75,6 +75,9 @@ export function applyOfflineProgress(state, balance, resourceManager, generatorD
 
   resourceManager.add("matter", matterGain);
   resourceManager.add("fire", fireGain);
+  if (typeof onAdvanceOffline === "function") {
+    onAdvanceOffline(elapsedSeconds);
+  }
   state.meta.lastTickAt = now;
 
   return { elapsedSeconds, matterGain, fireGain };
