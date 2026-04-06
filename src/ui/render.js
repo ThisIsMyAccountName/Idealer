@@ -51,11 +51,13 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-export function createRenderer({ appEl, state, balance, generatorDefs, formulas, systems, saveSlots }) {
+export function createRenderer({ appEl, state, balance, generatorDefs, formulas, systems, saveSlots, debugOptions = {} }) {
   const ui = {
     notice: "",
     good: false,
     activeTab: "upgrades",
+    debugPanelVisible: false,
+    lastDebugRefreshAt: 0,
     isBound: false,
     panelEl: null,
     pinnedEl: null,
@@ -64,6 +66,11 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     fleetFocusSlot: "hull",
     draggingPartId: "",
     dragHoverSlot: "",
+    dragSourceType: "",
+    dragSourceSlot: "",
+    dragSourceShipId: "",
+    dragDropHandled: false,
+    chestClaimPopup: null,
     lastExpeditionSignature: "",
     scrollPositions: {
       upgrades: 0,
@@ -107,7 +114,188 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       .join(" | ");
   }
 
+  function scalePartEffects(effects, scale = 1) {
+    const scaled = {};
+    Object.entries(effects || {}).forEach(([key, value]) => {
+      const numeric = Number(value) || 0;
+      scaled[key] = numeric * scale;
+    });
+    return scaled;
+  }
+
+  function summarizeDropNames(drops) {
+    if (!Array.isArray(drops) || drops.length === 0) {
+      return [];
+    }
+
+    const entries = [];
+    const byNameKey = new Map();
+    drops.forEach((drop) => {
+      const nameFromDrop = typeof drop?.name === "string" ? drop.name.trim() : "";
+      const nameFromId = typeof drop?.id === "string" ? drop.id.trim() : "";
+      const displayName = nameFromDrop || nameFromId || "Unknown Drop";
+      const normalizedKey = displayName.toLowerCase();
+      if (byNameKey.has(normalizedKey)) {
+        byNameKey.get(normalizedKey).count += 1;
+        return;
+      }
+      const entry = { name: displayName, count: 1 };
+      byNameKey.set(normalizedKey, entry);
+      entries.push(entry);
+    });
+
+    return entries.map((entry) => (entry.count > 1 ? `${entry.name} x${entry.count}` : entry.name));
+  }
+
+  function isTelemetryEnabled() {
+    if (typeof debugOptions?.isTelemetryEnabled !== "function") {
+      return false;
+    }
+    return Boolean(debugOptions.isTelemetryEnabled());
+  }
+
+  function setTelemetryEnabled(nextEnabled) {
+    if (typeof debugOptions?.setTelemetryEnabled === "function") {
+      debugOptions.setTelemetryEnabled(Boolean(nextEnabled));
+    }
+  }
+
+  function getGeneratorIncrementRate(def) {
+    let rate = def.baseRate;
+    if (def.id === "furnace") {
+      rate *= state.perks.furnaceRateMultiplier || 1;
+    }
+    if (def.id === "condenser") {
+      rate *= state.perks.condenserRateMultiplier || 1;
+    }
+    if (def.id === "prism") {
+      rate *= state.perks.prismRateMultiplier || 1;
+    }
+    const resourceMultiplier = def.resource === "matter"
+      ? state.perks.matterRateMultiplier
+      : state.perks.fireRateMultiplier;
+    return rate * state.perks.productionMultiplier * resourceMultiplier;
+  }
+
+  function isExpeditionUnlocked() {
+    return Boolean(systems.expeditions.getStatus().unlocked);
+  }
+
+  function getNextUpgradeText() {
+    const unlockedUpgradeIds = balance.upgradeOrder.filter((id) => systems.upgrades.isUnlocked(id));
+    const nextUpgradeId = unlockedUpgradeIds.find((id) => {
+      const tier = systems.upgrades.getTier(id);
+      return tier < systems.upgrades.getMaxTier(id);
+    });
+    return nextUpgradeId
+      ? `${balance.upgrades[nextUpgradeId]?.name || nextUpgradeId}: ${formatNumber(systems.upgrades.getCost(nextUpgradeId))} matter`
+      : "All unlocked upgrades maxed";
+  }
+
+  function buildDebugPanelMarkup() {
+    const telemetryEnabled = isTelemetryEnabled();
+    const generatorRows = Object.values(generatorDefs)
+      .map((def) => `
+        <div class="row">
+          <div class="kv"><strong>${def.name}</strong> Lv.<span data-debug-gen-level="${def.id}">0</span></div>
+          <div class="kv">+<span data-debug-gen-rate="${def.id}">0</span>/s | Next <span data-debug-gen-cost="${def.id}">0</span> ${def.costResource} | Payback <span data-debug-gen-payback="${def.id}">n/a</span> | Afford <span data-debug-gen-afford="${def.id}">no</span></div>
+        </div>
+      `)
+      .join("");
+
+    return `
+      <div class="debug-panel__header">
+        <h2>Balance Debug</h2>
+        <div class="debug-panel__actions">
+          ${actionButton(telemetryEnabled ? "Telemetry On" : "Telemetry Off", telemetryEnabled ? "secondary compact" : "ghost compact", "debug:telemetry")}
+          ${actionButton("Close", "ghost compact", "debug:toggle")}
+        </div>
+      </div>
+      <div class="row">
+        <div class="kv">Rates</div>
+        <div class="kv" data-debug-rates>0/s Matter | 0/s Fire</div>
+      </div>
+      <div class="row">
+        <div class="kv">Multipliers</div>
+        <div class="kv" data-debug-multipliers>prod x1.000 | matter x1.000 | fire x1.000 | growth x1.000</div>
+      </div>
+      <div class="row">
+        <div class="kv">Next Upgrade</div>
+        <div class="kv" data-debug-next-upgrade>None</div>
+      </div>
+      ${generatorRows}
+    `;
+  }
+
+  function cacheDebugRefs() {
+    refs.debugRates = appEl.querySelector("[data-debug-rates]");
+    refs.debugMultipliers = appEl.querySelector("[data-debug-multipliers]");
+    refs.debugNextUpgrade = appEl.querySelector("[data-debug-next-upgrade]");
+    refs.debugTelemetryButton = appEl.querySelector('button[data-action="debug:telemetry"]');
+
+    refs.debugGenerators = {};
+    Object.values(generatorDefs).forEach((def) => {
+      refs.debugGenerators[def.id] = {
+        level: appEl.querySelector(`[data-debug-gen-level="${def.id}"]`),
+        rate: appEl.querySelector(`[data-debug-gen-rate="${def.id}"]`),
+        cost: appEl.querySelector(`[data-debug-gen-cost="${def.id}"]`),
+        payback: appEl.querySelector(`[data-debug-gen-payback="${def.id}"]`),
+        afford: appEl.querySelector(`[data-debug-gen-afford="${def.id}"]`)
+      };
+    });
+  }
+
+  function refreshDebugPanelMetrics() {
+    if (!ui.debugPanelVisible || !refs.debugPanel) {
+      return;
+    }
+    if (!refs.debugRates || !refs.debugMultipliers || !refs.debugNextUpgrade || !refs.debugGenerators) {
+      return;
+    }
+
+    const rates = formulas.productionPerSecond(state, generatorDefs);
+    refs.debugRates.textContent = `${formatNumber(rates.matter)}/s Matter | ${formatNumber(rates.fire)}/s Fire`;
+    refs.debugMultipliers.textContent = `prod x${state.perks.productionMultiplier.toFixed(3)} | matter x${state.perks.matterRateMultiplier.toFixed(3)} | fire x${state.perks.fireRateMultiplier.toFixed(3)} | growth x${state.perks.generatorCostGrowthMultiplier.toFixed(3)}`;
+    refs.debugNextUpgrade.textContent = getNextUpgradeText();
+
+    Object.values(generatorDefs).forEach((def) => {
+      const rowRefs = refs.debugGenerators[def.id];
+      if (!rowRefs) {
+        return;
+      }
+      const level = state.generators[def.id] || 0;
+      const cost = generatorCost(def, level, state.perks.generatorCostGrowthMultiplier);
+      const incrementalRate = getGeneratorIncrementRate(def);
+      const paybackSeconds = incrementalRate > 0 ? cost / incrementalRate : Number.POSITIVE_INFINITY;
+
+      if (rowRefs.level) {
+        rowRefs.level.textContent = String(level);
+      }
+      if (rowRefs.rate) {
+        rowRefs.rate.textContent = formatNumber(incrementalRate);
+      }
+      if (rowRefs.cost) {
+        rowRefs.cost.textContent = formatNumber(cost);
+      }
+      if (rowRefs.payback) {
+        rowRefs.payback.textContent = Number.isFinite(paybackSeconds) ? formatDuration(paybackSeconds) : "n/a";
+      }
+      if (rowRefs.afford) {
+        const available = state.resources[def.costResource] || 0;
+        rowRefs.afford.textContent = available >= cost ? "yes" : "no";
+      }
+    });
+
+    const telemetryEnabled = isTelemetryEnabled();
+    if (refs.debugTelemetryButton) {
+      refs.debugTelemetryButton.textContent = telemetryEnabled ? "Telemetry On" : "Telemetry Off";
+      refs.debugTelemetryButton.classList.toggle("secondary", telemetryEnabled);
+      refs.debugTelemetryButton.classList.toggle("ghost", !telemetryEnabled);
+    }
+  }
+
   function buildLayout() {
+    const expeditionUnlocked = isExpeditionUnlocked();
     const slotOptions = saveSlots
       ? saveSlots.slots
           .map((slot) => {
@@ -129,39 +317,50 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             ${slotOptions}
           </select>
           <button class="ghost" data-action="save-reset">Reset Slot</button>
+          <button class="ghost" data-action="debug:toggle">Debug</button>
         </div>
-        ` : ""}
+        ` : `
+        <div class="save-bar">
+          <button class="ghost" data-action="debug:toggle">Debug</button>
+        </div>
+        `}
 
         <div class="resource-grid">
-          <div class="resource-card resource-card--matter">
-            <div class="label">Matter</div>
+          <div class="resource-card resource-card--matter" data-resource="matter">
+            <div class="card-title">
+              <span class="card-icon" aria-hidden="true">MAT</span>
+              <div class="label">Matter</div>
+            </div>
             <div class="value" id="matter-value">0</div>
-            <div class="hint" id="transmute-yield">+1 Matter</div>
+            <div class="hint" id="transmute-yield">+1 Matter/tap</div>
             <div class="action">${actionButton("Transmute", "primary", "transmute")}</div>
           </div>
-          <div class="resource-card resource-card--fire">
-            <div class="label">Fire Essence</div>
+          <div class="resource-card resource-card--fire" data-resource="fire">
+            <div class="card-title">
+              <span class="card-icon" aria-hidden="true">FIR</span>
+              <div class="label">Fire</div>
+            </div>
             <div class="value" id="fire-value">0</div>
-            <div class="hint" id="convert-yield">100 Matter -> 1 Fire</div>
+            <div class="hint" id="convert-yield">100M -> 1F</div>
             <div class="action">${actionButton("Convert", "secondary", "convert")}</div>
           </div>
-          <div class="resource-card resource-card--ascend">
-            <div class="label">Ascension Shards</div>
+          <div class="resource-card resource-card--ascend" data-resource="shards">
+            <div class="card-title">
+              <span class="card-icon" aria-hidden="true">SHD</span>
+              <div class="label">Shards</div>
+            </div>
             <div class="value" id="shards-value">0</div>
-            <div class="hint" id="ascend-gain">Projected gain: +0 Shards</div>
+            <div class="hint" id="ascend-gain">0M + 0F -> +0S</div>
             <div class="action">${actionButton("Ascend", "ghost", "ascend")}</div>
           </div>
-          <div class="resource-card resource-card--intel">
-            <div class="label">Expedition Intel</div>
+          <div class="resource-card resource-card--intel ${expeditionUnlocked ? "" : "is-locked"}" data-resource="intel" id="intel-card">
+            <div class="card-title">
+              <span class="card-icon" aria-hidden="true">EXP</span>
+              <div class="label">Intel</div>
+            </div>
             <div class="value" id="intel-value">0</div>
-            <div class="hint">Used for expedition launches and ship upgrades</div>
-            <div class="action">${actionButton("Expeditions", "secondary", "tab:expeditions")}</div>
-          </div>
-          <div class="resource-card resource-card--prod">
-            <div class="label">Production Multiplier</div>
-            <div class="value" id="prod-multiplier">x1.00</div>
-            <div class="hint">Total output bonus</div>
-            <div class="hint" id="rate-value">0/s Matter | 0/s Fire</div>
+            <div class="hint" id="intel-hint">${expeditionUnlocked ? "Runs and ship upgrades" : "Unlock Expedition Keystone"}</div>
+            <div class="action"><button class="secondary" data-action="tab:expeditions" id="intel-open" ${expeditionUnlocked ? "" : "disabled"}>Expeditions</button></div>
           </div>
         </div>
       </section>
@@ -169,7 +368,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       <section class="tabbar">
         ${actionButton("Upgrades", "ghost tab", "tab:upgrades")}
         ${actionButton("Research", "ghost tab", "tab:research")}
-        ${actionButton("Expeditions", "ghost tab", "tab:expeditions")}
+        ${actionButton("Expeditions", "ghost tab", "tab:expeditions", !expeditionUnlocked)}
         ${actionButton("Ascend", "ghost tab", "tab:ascend")}
       </section>
 
@@ -178,17 +377,23 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
         <article class="panel" id="dynamic-panel"></article>
       </section>
+
+      <section class="panel debug-panel hidden" id="debug-panel"></section>
     `;
 
     refs.matter = appEl.querySelector("#matter-value");
     refs.fire = appEl.querySelector("#fire-value");
     refs.shards = appEl.querySelector("#shards-value");
     refs.intel = appEl.querySelector("#intel-value");
-    refs.prodMultiplier = appEl.querySelector("#prod-multiplier");
+    refs.intelCard = appEl.querySelector("#intel-card");
+    refs.intelHint = appEl.querySelector("#intel-hint");
+    refs.intelAction = appEl.querySelector("#intel-open");
+    refs.expeditionsTab = appEl.querySelector('button[data-action="tab:expeditions"]');
     refs.mainGrid = appEl.querySelector("#main-grid");
     ui.pinnedEl = appEl.querySelector("#pinned-panel");
     refs.saveSlot = appEl.querySelector("#save-slot");
     refs.saveReset = appEl.querySelector("[data-action='save-reset']");
+    refs.debugPanel = appEl.querySelector("#debug-panel");
     ui.panelEl = appEl.querySelector("#dynamic-panel");
   }
 
@@ -203,6 +408,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.transmuteYield = appEl.querySelector("#transmute-yield");
     refs.convertYield = appEl.querySelector("#convert-yield");
     refs.ascendGain = appEl.querySelector("#ascend-gain");
+    refs.prodInline = appEl.querySelector("#prod-inline");
     refs.rate = appEl.querySelector("#rate-value");
     refs.notice = appEl.querySelector("#notice");
     refs.convertButton = appEl.querySelector('button[data-action="convert"]');
@@ -210,6 +416,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
   }
 
   function renderOverviewPanel(rates) {
+    const rateLine = `${formatNumber(rates.matter)}/s Matter | ${formatNumber(rates.fire)}/s Fire`;
     const generatorRows = Object.values(generatorDefs)
       .map((def) => {
         const level = state.generators[def.id] || 0;
@@ -231,12 +438,41 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     return `
       <h2>Generators</h2>
+      <div class="row row--overview-output">
+        <div class="muted">Output</div>
+        <div class="kv"><span id="prod-inline">x${state.perks.productionMultiplier.toFixed(2)}</span> mult | <span id="rate-value">${rateLine}</span></div>
+      </div>
       ${generatorRows}
       <div class="row">
         <div class="muted">Hint</div>
         <div class="kv">Buy generators to automate income.</div>
       </div>
     `;
+  }
+
+  function renderDebugPanel() {
+    if (!refs.debugPanel) {
+      return;
+    }
+    if (!ui.debugPanelVisible) {
+      refs.debugPanel.classList.add("hidden");
+      return;
+    }
+
+    if (!refs.debugPanel.querySelector("[data-debug-rates]")) {
+      refs.debugPanel.innerHTML = buildDebugPanelMarkup();
+      cacheDebugRefs();
+    }
+
+    refs.debugPanel.classList.remove("hidden");
+    refreshDebugPanelMetrics();
+  }
+
+  function toggleDebugPanel(forceState) {
+    ui.debugPanelVisible = typeof forceState === "boolean" ? forceState : !ui.debugPanelVisible;
+    ui.lastDebugRefreshAt = 0;
+    renderDebugPanel();
+    return ui.debugPanelVisible;
   }
 
   function renderUpgradesPanel() {
@@ -419,16 +655,25 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       .map((slot) => {
         const active = selectedSlot === slot ? " active" : "";
         const label = slot[0].toUpperCase() + slot.slice(1);
-        const equippedId = selectedShipState.equippedParts?.[slot];
-        const equippedPart = equippedId && partDefs[equippedId] ? partDefs[equippedId] : null;
-        const equippedName = equippedPart ? equippedPart.name : "None";
-        const effectsText = equippedPart ? formatPartEffects(equippedPart.effects || {}) : "Drop compatible part here";
+        const equippedRefRaw = selectedShipState.equippedParts?.[slot];
+        const equippedRef = systems.ships.parsePartRef?.(equippedRefRaw) || null;
+        const equippedPart = equippedRef && partDefs[equippedRef.partId] ? partDefs[equippedRef.partId] : null;
+        const tier = Math.max(1, Number(equippedRef?.tier) || 1);
+        const effectsScale = equippedPart ? systems.ships.getPartTierScale?.(equippedRef.partId, tier) || 1 : 1;
+        const equippedName = equippedPart ? `${equippedPart.name} T${tier}` : "None";
+        const effectsText = equippedPart
+          ? formatPartEffects(scalePartEffects(equippedPart.effects || {}, effectsScale))
+          : "Drop compatible part here";
         const zoneStyle = getZoneStyleForShip(selectedShipDef, slot);
+        const equippedRefValue = equippedRef?.ref || "";
+        const draggableAttr = equippedRefValue ? 'draggable="true"' : "";
+        const dragHint = equippedRefValue ? "<span class=\"ship-zone-drag-hint\">Drag off ship to unequip</span>" : "";
         return `
-          <button class="ship-zone${active}" data-action="ship:focus:${slot}" data-slot="${slot}" data-ship-id="${selectedShipId}" ${zoneStyle}>
+          <button class="ship-zone${active}" data-action="ship:focus:${slot}" data-slot="${slot}" data-ship-id="${selectedShipId}" data-equipped-ref="${equippedRefValue}" ${zoneStyle} ${draggableAttr}>
             <strong>${label}</strong>
             <span>${equippedName}</span>
             <span class="ship-zone-meta">${effectsText || "No stat modifiers."}</span>
+            ${dragHint}
           </button>
         `;
       })
@@ -568,20 +813,30 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const selectedShipStats = systems.ships.getShipStats(selectedShipId) || null;
     const selectedSlot = ui.fleetFocusSlot;
     const equippedPartCounts = shipStatus.equippedPartCounts || {};
+    const fusionInfo = shipStatus.partFusion || {};
     const allPartItems = Object.entries(shipStatus.partInventory || {})
       .filter(([, count]) => Number(count) > 0)
-      .map(([partId, count]) => {
-        const def = partDefs[partId];
+      .map(([partRef, count]) => {
+        const parsed = systems.ships.parsePartRef?.(partRef);
+        if (!parsed) {
+          return null;
+        }
+        const def = partDefs[parsed.partId];
         if (!def) {
           return null;
         }
-        const equippedCount = Number(equippedPartCounts[partId]) || 0;
+        const normalizedRef = parsed.ref || partRef;
+        const equippedCount = Number(equippedPartCounts[normalizedRef]) || 0;
         const availableCount = Math.max(0, Number(count) - equippedCount);
+        const combineInfo = systems.ships.getCombineInfo?.(normalizedRef) || { ok: false, reason: "Unable to fuse." };
         return {
-          partId,
+          partRef: normalizedRef,
+          basePartId: parsed.partId,
+          tier: Math.max(1, Number(parsed.tier) || 1),
           count: Number(count),
           equippedCount,
           availableCount,
+          combineInfo,
           def,
           compatibleWithSelectedShip: !def.shipId || def.shipId === selectedShipId,
           compatibleWithFocusSlot: def.slot === selectedSlot
@@ -593,47 +848,66 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         if (a.def.slot !== b.def.slot) {
           return String(a.def.slot).localeCompare(String(b.def.slot));
         }
+        const nameDiff = String(a.def.name || a.basePartId).localeCompare(String(b.def.name || b.basePartId));
+        if (nameDiff !== 0) {
+          return nameDiff;
+        }
+        if (a.tier !== b.tier) {
+          return a.tier - b.tier;
+        }
         const rarityDiff = (rarityWeight[a.def.rarity] || 0) - (rarityWeight[b.def.rarity] || 0);
         if (rarityDiff !== 0) {
           return rarityDiff;
         }
-        return String(a.def.name || a.partId).localeCompare(String(b.def.name || b.partId));
+        return String(a.basePartId).localeCompare(String(b.basePartId));
       });
 
     const inventoryRows = allPartItems.length > 0
       ? allPartItems.map((item) => {
-        const encoded = encodeURIComponent(item.partId);
-        const effectText = formatPartEffects(item.def.effects || {});
+        const encoded = encodeURIComponent(item.partRef);
+        const effectScale = systems.ships.getPartTierScale?.(item.basePartId, item.tier) || 1;
+        const effectText = formatPartEffects(scalePartEffects(item.def.effects || {}, effectScale));
         const rarity = item.def.rarity || "rare";
-        const canEquipByCount = item.availableCount > 0 || selectedShipState.equippedParts?.[selectedSlot] === item.partId;
+        const slotEquippedRef = systems.ships.parsePartRef?.(selectedShipState.equippedParts?.[item.def.slot] || "")?.ref || "";
+        const canEquipByCount = item.availableCount > 0 || slotEquippedRef === item.partRef;
         const canEquipByFilter = item.compatibleWithSelectedShip;
         const canEquip = canEquipByCount && canEquipByFilter;
+        const canCombine = Boolean(item.combineInfo?.ok);
+        const combineLabel = canCombine ? `Fuse -> T${item.combineInfo.nextTier}` : "Fuse";
+        const combineHint = canCombine
+          ? `Consumes 2x T${item.tier}, creates 1x T${item.combineInfo.nextTier}.`
+          : (item.combineInfo?.reason || "Cannot fuse now.");
         const equippedBadge = item.equippedCount > 0 ? `<span class="chip">Equipped ${item.equippedCount}</span>` : "";
         const shipBadge = item.def.shipId ? `<span class="chip chip--ship">${item.def.shipId}</span>` : "";
         return `
-          <div class="inventory-item inventory-item--part" draggable="true" data-part-id="${item.partId}" data-slot="${item.def.slot}" data-ship-id="${selectedShipId}">
+          <div class="inventory-item inventory-item--part" draggable="true" data-part-id="${item.partRef}" data-slot="${item.def.slot}" data-ship-id="${selectedShipId}">
             <div>
-              <div><strong>${item.def.name}</strong> x${item.count} <span class="kv">(${item.availableCount} free)</span></div>
-              <div class="chip-row"><span class="chip chip--rarity">${rarity}</span><span class="chip">${item.def.slot}</span>${shipBadge}${equippedBadge}</div>
+              <div><strong>${item.def.name} T${item.tier}</strong> x${item.count} <span class="kv">(${item.availableCount} free)</span></div>
+              <div class="chip-row"><span class="chip chip--rarity">${rarity}</span><span class="chip chip--tier">T${item.tier}</span><span class="chip">${item.def.slot}</span>${shipBadge}${equippedBadge}</div>
               <div class="kv">${effectText || "No stat modifiers."}</div>
+              <div class="kv">${combineHint}</div>
             </div>
-            ${actionButton("Equip", "secondary compact", `ship:equip:${selectedShipId}:${item.def.slot}:${encoded}`, !canEquip)}
+            <div class="inventory-item-actions">
+              ${actionButton("Equip", "secondary compact", `ship:equip:${selectedShipId}:${item.def.slot}:${encoded}`, !canEquip)}
+              ${actionButton(combineLabel, "ghost compact", `ship:combine:${encoded}`, !canCombine)}
+            </div>
           </div>
         `;
       }).join("")
       : "<div class=\"kv\">No compatible parts available for this ship yet.</div>";
 
     return `
-      <h2>Ships</h2>
+      <h2>${selectedShipDef.name ? ` ${selectedShipDef.name}` : ""}</h2>
       <div class="ship-gui-layout">
         <section class="ship-gui-main">
           ${renderShipGraphic(shipStatus, selectedShipId, selectedShipState, selectedShipDef, selectedSlot, partDefs)}
           <div class="kv">${selectedShipDef.name || selectedShipId} | Speed x${selectedShipStats ? selectedShipStats.speedMultiplier.toFixed(2) : "1.00"} | Risk Mit +${selectedShipStats ? (selectedShipStats.riskMitigation * 100).toFixed(1) : "0.0"}% | Yield x${selectedShipStats ? selectedShipStats.yieldMultiplier.toFixed(2) : "1.00"} | Rare x${selectedShipStats ? selectedShipStats.rareDropWeight.toFixed(2) : "1.00"}</div>
+          <div class="kv">Tip: drag an equipped part off the ship graphic to unequip it.</div>
         </section>
         <section class="ship-gui-inventory">
           <div class="inventory-header">
             <h3>Part Inventory</h3>
-            <div class="kv">Sorted by slot, rarity, and name. Drag to a slot or press Equip on a card.</div>
+            <div class="kv">Cap T${Math.max(1, Number(fusionInfo.effectiveGlobalMaxTier) || 6)} | Fuse 2 of the same tier into 1 higher tier.</div>
           </div>
           <div class="inventory-list inventory-list--parts">${inventoryRows}</div>
         </section>
@@ -641,15 +915,40 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     `;
   }
 
+  function renderExpeditionsLockedPanel() {
+    return `
+      <h2>Prestige Expeditions</h2>
+      <div class="muted">Unlock <strong>Expedition Keystone</strong> in Ascend to access expedition runs, fleet dock upgrades, and ship loadouts.</div>
+      <div class="row">
+        <div class="kv">Expedition details remain hidden until the unlock is purchased.</div>
+        ${actionButton("Go to Ascend", "secondary", "tab:ascend")}
+      </div>
+    `;
+  }
+
   function renderExpeditionsPanel() {
     const expeditionStatus = systems.expeditions.getStatus();
-    const unlockNodeId = expeditionStatus.unlockNodeId;
-    const unlockNodeOwned = unlockNodeId ? systems.ascendTree.hasNode(unlockNodeId) : true;
+    if (!expeditionStatus.unlocked) {
+      ui.expeditionsView = "runs";
+      return renderExpeditionsLockedPanel();
+    }
+
     const shipStats = expeditionStatus.selectedShipStats;
     const shipLine = expeditionStatus.selectedShip
       ? `<div class="kv">Ship: ${expeditionStatus.selectedShip.toUpperCase()}${shipStats ? ` | Speed x${shipStats.speedMultiplier.toFixed(2)} | Risk Mit +${(shipStats.riskMitigation * 100).toFixed(1)}% | Yield x${shipStats.yieldMultiplier.toFixed(2)}` : ""}</div>`
       : "<div class=\"kv\">No ship selected.</div>";
     const autoMode = expeditionStatus.autoRouteMode || "manual";
+    const modeLabels = { manual: "Manual", safe: "Safe", balanced: "Balanced", aggressive: "Aggro" };
+    const modeRow = `
+      <div class="expedition-mode-row">
+        <div class="kv">Route Mode</div>
+        <div class="expedition-mode-buttons">
+          ${Object.keys(modeLabels)
+            .map((mode) => actionButton(modeLabels[mode], `ghost compact mode-btn ${autoMode === mode ? "active" : ""}`, `expedition:mode:${mode}`))
+            .join("")}
+        </div>
+      </div>
+    `;
     const subTabs = `
       <div class="expedition-subtabs">
         ${actionButton("Runs", `ghost ${ui.expeditionsView === "runs" ? "active" : ""}`, "expedition:view:runs")}
@@ -672,47 +971,52 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       </div>
     `;
 
-    if (!unlockNodeOwned) {
-      return `
-        ${subTabs}
-        <h2>Prestige Expeditions</h2>
-        ${shipLine}
-        <div class="muted">Expeditions are prestige-first content. Unlock <strong>Expedition Keystone</strong> in Ascend to begin.</div>
-        ${metaRows}
-      `;
-    }
-
-    if (expeditionStatus.pendingRewards) {
-      const pending = expeditionStatus.pendingRewards;
-      const rewards = pending.rewards || {};
-      const outcome = pending.success ? "Success" : "Failure";
-      const routeSummary = (pending.routeHistory || [])
-        .map((step) => step.name)
-        .join(" -> ");
-      const encounterSummary = (pending.encounters || [])
-        .slice(-2)
-        .map((entry) => `${entry.name} (${entry.success ? "stabilized" : "breach"})`)
-        .join(" | ");
-      const dropSummary = (pending.drops || [])
-        .map((drop) => drop.name)
-        .join(" | ");
-      return `
-        ${subTabs}
-        <h2>Prestige Expeditions</h2>
-        ${shipLine}
-        <div class="row">
-          <div>
-            <div><strong>${pending.bandName}</strong> resolved: ${outcome}</div>
-            <div class="kv">Claim: +${formatNumber(rewards.matter || 0)} Matter, +${formatNumber(rewards.fire || 0)} Fire, +${formatNumber(rewards.intel || 0)} Intel</div>
-            ${routeSummary ? `<div class="kv">Route: ${routeSummary}</div>` : ""}
-            ${encounterSummary ? `<div class="kv">Encounters: ${encounterSummary}</div>` : ""}
-            ${dropSummary ? `<div class="kv">Rare Finds: ${dropSummary}</div>` : ""}
+    const chest = expeditionStatus.rewardsChest || { capacity: 10, items: [] };
+    const chestItems = Array.isArray(chest.items) ? chest.items : [];
+    const chestCapacity = Math.max(1, Number(chest.capacity) || 10);
+    const chestCount = chestItems.length;
+    const chestFull = chestCount >= chestCapacity;
+    const nextChestReward = chestItems[0] || null;
+    const nextRewards = nextChestReward?.rewards || {};
+    const nextDropCount = Array.isArray(nextChestReward?.drops) ? nextChestReward.drops.length : 0;
+    const continuous = expeditionStatus.continuous || { active: false, bandId: null, stopReason: "" };
+    const loopState = continuous.active
+      ? `Running${continuous.bandId ? ` (${continuous.bandId})` : ""}`
+      : (continuous.stopReason ? `Stopped: ${continuous.stopReason}` : "Idle");
+    const claimPopup = ui.chestClaimPopup
+      ? `
+        <div class="expedition-claim-popup" role="dialog" aria-live="polite">
+          <div class="expedition-claim-popup__title">Chest Loot</div>
+          <div class="expedition-claim-popup__line">${ui.chestClaimPopup.runCount} run${ui.chestClaimPopup.runCount === 1 ? "" : "s"}</div>
+          <div class="expedition-claim-popup__line">+${formatNumber(ui.chestClaimPopup.totalRewards.matter || 0)} Matter | +${formatNumber(ui.chestClaimPopup.totalRewards.fire || 0)} Fire</div>
+          <div class="expedition-claim-popup__line">+${formatNumber(ui.chestClaimPopup.totalRewards.intel || 0)} Intel${ui.chestClaimPopup.totalRewards.shards > 0 ? ` | +${formatNumber(ui.chestClaimPopup.totalRewards.shards)} Shards` : ""}</div>
+          ${ui.chestClaimPopup.rareDropNames?.length
+            ? `<div class="expedition-claim-popup__line">Rare: ${ui.chestClaimPopup.rareDropNames.join(" | ")}</div>`
+            : ""}
+          <div class="expedition-claim-popup__actions">
+            ${actionButton("Close", "ghost compact", "expedition:claim-all:cancel")}
+            ${actionButton("Claim", "primary compact", "expedition:claim-all:confirm")}
           </div>
-          ${actionButton("Claim Rewards", "primary", "expedition:claim")}
         </div>
-        ${metaRows}
-      `;
-    }
+      `
+      : "";
+    const chestRow = `
+      <div class="expedition-chest-compact">
+        <div class="expedition-chest-main">
+          <div class="expedition-chest-title">Rewards Chest ${chestCount}/${chestCapacity}${chestFull ? " • FULL" : ""}</div>
+          <div class="expedition-chest-stats">
+            <span>Loop: ${loopState}</span>
+            ${nextChestReward
+              ? `<span>Next: +${formatNumber(nextRewards.matter || 0)}M, +${formatNumber(nextRewards.fire || 0)}F, +${formatNumber(nextRewards.intel || 0)}I${nextDropCount > 0 ? `, ${nextDropCount} drop` : ""}</span>`
+              : "<span>Chest empty</span>"}
+          </div>
+        </div>
+        <div class="expedition-chest-actions">
+          ${actionButton("Claim All", "secondary", "expedition:claim-all", chestCount === 0)}
+          ${claimPopup}
+        </div>
+      </div>
+    `;
 
     if (expeditionStatus.activeRun) {
       const run = expeditionStatus.activeRun;
@@ -730,56 +1034,51 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       const mitigatedRisk = currentRisk * (1 - totalMitigation);
       const routeRows = (run.routeHistory || [])
         .slice(-3)
-        .map((item) => `<div class="kv">Stage ${item.stage}: ${item.name}</div>`)
+        .map((item) => `<div class="kv">S${item.stage}: ${item.name}</div>`)
         .join("");
       const encounterRows = (run.encounterLog || [])
         .slice(-2)
-        .map((entry) => `<div class="kv">${entry.name}: ${entry.success ? "stabilized" : "breach"}</div>`)
+        .map((entry) => `<div class="kv">${entry.name} (${entry.success ? "ok" : "fail"})</div>`)
         .join("");
       const dropRows = (run.pendingDrops || [])
-        .slice(-2)
-        .map((drop) => `<div class="kv">Rare find secured: ${drop.name}</div>`)
+        .slice(-3)
+        .map((drop) => `<div class="kv">${drop.name}</div>`)
         .join("");
+      const logDetails = (routeRows || encounterRows || dropRows)
+        ? `
+          <details class="expedition-log">
+            <summary>Run Log</summary>
+            ${routeRows ? `<div>${routeRows}</div>` : ""}
+            ${encounterRows ? `<div>${encounterRows}</div>` : ""}
+            ${dropRows ? `<div>${dropRows}</div>` : ""}
+          </details>
+        `
+        : "";
 
       const choicePanel = run.awaitingChoice
         ? `
-          <div class="row">
-            <div>
-              <div><strong>Route Decision Required</strong></div>
-              <div class="kv">Choose a branch for stage ${Math.min(run.stageIndex + 1, run.stageCount)}.</div>
-            </div>
-          </div>
-          <div class="scroll-panel">
+          <div class="expedition-choice-list">
             ${(run.pendingChoices || [])
               .map((choice) => {
                 const risk = Number(choice.riskDelta) || 0;
                 const yieldDelta = Number(choice.yieldDelta) || 0;
+                const speed = Number(choice.speedMultiplier || 1);
+                const intelFlat = Math.round(Number(choice.intelFlat || 0));
                 const riskText = `${risk >= 0 ? "+" : ""}${(risk * 100).toFixed(1)}% risk`;
                 const yieldText = `${yieldDelta >= 0 ? "+" : ""}${(yieldDelta * 100).toFixed(1)}% yield`;
-                const projectedRisk = clamp(currentRisk + risk, 0.04, 0.98);
-                const projectedMitigatedRisk = projectedRisk * (1 - totalMitigation);
-                const variance = choice.stageVarianceSummary;
-                const varianceLine = variance
-                  ? `<div class="kv">Stage variance: risk ${(variance.riskDelta >= 0 ? "+" : "")}${(variance.riskDelta * 100).toFixed(1)}%, yield ${(variance.yieldDelta >= 0 ? "+" : "")}${(variance.yieldDelta * 100).toFixed(1)}%, speed x${Number(variance.speedMultiplier || 1).toFixed(2)}, intel ${(Number(variance.intelFlat || 0) >= 0 ? "+" : "")}${Math.round(Number(variance.intelFlat || 0))}</div>`
-                  : "";
-                const routeLine = choice.encounterPool
-                  ? `<div class="kv">Encounter profile: ${choice.encounterPool}</div>`
-                  : "";
-                const lockLine = choice.unlocked
-                  ? ""
-                  : `<div class="kv">${choice.lockReason || "Locked by prestige requirements."}</div>`;
                 return `
-                  <div class="row">
-                    <div>
+                  <div class="expedition-choice-card">
+                    <div class="expedition-choice-main">
                       <div><strong>${choice.name}</strong></div>
-                      <div class="kv">${choice.description || ""}</div>
-                      <div class="kv">${riskText} | ${yieldText}</div>
-                      <div class="kv">Projected risk: ${(projectedRisk * 100).toFixed(1)}% (mitigated ${(projectedMitigatedRisk * 100).toFixed(1)}%)</div>
-                      ${varianceLine}
-                      ${routeLine}
-                      ${lockLine}
+                      <div class="expedition-choice-stats">
+                        <span>${riskText}</span>
+                        <span>${yieldText}</span>
+                        <span>x${speed.toFixed(2)} speed</span>
+                        <span>${intelFlat >= 0 ? "+" : ""}${intelFlat} intel</span>
+                      </div>
+                      ${choice.unlocked ? "" : `<div class="kv">${choice.lockReason || "Locked"}</div>`}
                     </div>
-                    ${actionButton("Commit", "secondary", `expedition:route:${choice.id}`, !choice.unlocked)}
+                    ${actionButton("Pick", "secondary", `expedition:route:${choice.id}`, !choice.unlocked)}
                   </div>
                 `;
               })
@@ -792,16 +1091,16 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         ${subTabs}
         <h2>Prestige Expeditions</h2>
         ${shipLine}
-        <div class="row">
-          <div>
+        ${modeRow}
+        ${chestRow}
+        <div class="row expedition-run-card">
+          <div class="expedition-run-main">
             <div><strong>${band?.name || run.bandId}</strong> in progress</div>
             <div class="kv" id="expedition-stage-text">Stage ${Math.min(run.stageIndex + 1, run.stageCount)} / ${run.stageCount} | ${progress.toFixed(1)}% total</div>
             <div class="kv" id="expedition-segment-text">Segment: ${formatDuration(run.segmentElapsedSeconds || 0)} / ${formatDuration(run.segmentDurationSeconds || 0)}</div>
-            <div class="kv">Current risk: ${(currentRisk * 100).toFixed(1)}% (mitigated ${(mitigatedRisk * 100).toFixed(1)}%)</div>
-            <div class="kv">Route mode: ${run.autoRouteMode || autoMode}</div>
-            ${routeRows}
-            ${encounterRows}
-            ${dropRows}
+            <div class="kv">Risk ${(currentRisk * 100).toFixed(1)}% | Mitigated ${(mitigatedRisk * 100).toFixed(1)}%</div>
+            <div class="kv">Mode ${run.autoRouteMode || autoMode} | Reward x${Number(run.automationRewardMultiplier || 1).toFixed(2)}</div>
+            ${logDetails}
           </div>
           ${actionButton("Abandon", "ghost", "expedition:abandon")}
         </div>
@@ -814,24 +1113,27 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const bandRows = expeditionStatus.bands
       .map((band) => {
         const cost = band.cost || {};
-        const disabled = !band.unlock.ok;
-        const requirements = disabled ? `<div class="kv">${band.unlock.reason}</div>` : "";
+        const disabledByUnlock = !band.unlock.ok;
+        const disabledByChest = chestFull;
+        const disabled = disabledByUnlock || disabledByChest;
+        const requirements = disabledByUnlock
+          ? `<div class="kv">${band.unlock.reason}</div>`
+          : (disabledByChest ? "<div class=\"kv\">Chest full. Claim rewards first.</div>" : "");
+        const costLine = `${formatNumber(cost.matter || 0)}M | ${formatNumber(cost.fire || 0)}F | ${formatNumber(cost.intel || 0)}I`;
         return `
-          <div class="row">
-            <div>
-              <div><strong>Band ${band.rank}: ${band.name}</strong></div>
-              <div class="kv">${band.description}</div>
-              <div class="kv">Cost: ${formatNumber(cost.matter || 0)} Matter | ${formatNumber(cost.fire || 0)} Fire | ${formatNumber(cost.intel || 0)} Intel</div>
-              <div class="kv">Intel Pressure Fee: ${formatNumber(band.intelLaunchCost || 0)} Intel</div>
-              <div class="kv">Duration: ${formatDuration(band.durationSeconds || 0)} | Risk: ${((band.risk || 0) * 100).toFixed(1)}%</div>
-              <div class="kv">Stages: ${Math.max(1, band.stageCount || 1)} | Branching route decisions each stage</div>
+          <article class="expedition-band-card">
+            <div><strong>Band ${band.rank}: ${band.name}</strong></div>
+            <div class="kv">${costLine}</div>
+            <div class="kv">${formatDuration(band.durationSeconds || 0)} | ${(Number(band.risk || 0) * 100).toFixed(1)}% risk | Fee ${formatNumber(band.intelLaunchCost || 0)}I</div>
+            <div class="kv">${Math.max(1, band.stageCount || 1)} stage${Math.max(1, band.stageCount || 1) === 1 ? "" : "s"}</div>
+            ${band.description ? `<div class="kv">${band.description}</div>` : ""}
+            <div class="expedition-inline-note">
               ${requirements}
             </div>
-            <div class="expedition-launch-actions">
-              ${actionButton("Launch", "ghost", `expedition:start:${band.id}`, disabled)}
-              ${actionButton("Auto", "secondary", `expedition:auto:${band.id}`, disabled)}
+            <div class="expedition-band-actions">
+              ${actionButton("Start Loop", "secondary", `expedition:start:${band.id}`, disabled)}
             </div>
-          </div>
+          </article>
         `;
       })
       .join("");
@@ -840,8 +1142,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       ${subTabs}
       <h2>Prestige Expeditions</h2>
       ${shipLine}
-      <div class="muted">Launch a run, wait for resolution, then claim rewards. Ascension nodes control your depth and safety.</div>
-      <div class="scroll-panel">${bandRows}${metaRows}</div>
+      ${modeRow}
+      ${chestRow}
+      <div class="expedition-band-grid">${bandRows}</div>
+      ${metaRows}
     `;
   }
 
@@ -871,8 +1175,9 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
   function renderPanel() {
     const rates = formulas.productionPerSecond(state, generatorDefs);
+    const expeditionUnlocked = isExpeditionUnlocked();
     const isAscendTab = ui.activeTab === "ascend";
-    const isExpeditionsTab = ui.activeTab === "expeditions";
+    const isExpeditionsTab = ui.activeTab === "expeditions" && expeditionUnlocked;
     const isFullWidthTab = isAscendTab || isExpeditionsTab;
     if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions")) {
       const currentScroll = ui.panelEl.querySelector(".scroll-panel");
@@ -906,7 +1211,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
   function getExpeditionRenderSignature() {
     const status = systems.expeditions.getStatus();
     const run = status.activeRun;
-    const pending = status.pendingRewards;
+    const chest = status.rewardsChest || { capacity: 0, items: [] };
+    const chestCount = Array.isArray(chest.items) ? chest.items.length : 0;
+    const chestCapacity = Math.max(0, Number(chest.capacity) || 0);
+    const continuous = status.continuous || { active: false, bandId: null, stopReason: "" };
     return [
       ui.expeditionsView,
       status.selectedShip || "",
@@ -918,8 +1226,13 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       run?.routeHistory?.length ?? 0,
       run?.encounterLog?.length ?? 0,
       run?.pendingDrops?.length ?? 0,
-      pending ? "pending" : "no-pending",
-      pending?.drops?.length ?? 0
+      chestCount,
+      chestCapacity,
+      ui.chestClaimPopup ? 1 : 0,
+      ui.chestClaimPopup?.runCount ?? 0,
+      continuous.active ? 1 : 0,
+      continuous.bandId || "",
+      continuous.stopReason || ""
     ].join("|");
   }
 
@@ -1082,8 +1395,30 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         return;
       }
       const action = target.getAttribute("data-action") || "";
+      const expeditionActionRequested =
+        action === "tab:expeditions" ||
+        action.startsWith("expedition:") ||
+        action.startsWith("ship:");
+      if (!isExpeditionUnlocked() && expeditionActionRequested) {
+        ui.expeditionsView = "runs";
+        setNotice("Unlock Expedition Keystone in Ascend to access Expeditions.", false);
+        if (action === "tab:expeditions") {
+          ui.activeTab = "ascend";
+          renderPanel();
+        }
+        refreshHud();
+        return;
+      }
 
-      if (action === "transmute") {
+      if (action === "debug:toggle") {
+        toggleDebugPanel();
+      } else if (action === "debug:telemetry") {
+        const nextEnabled = !isTelemetryEnabled();
+        setTelemetryEnabled(nextEnabled);
+        setNotice(`Balance telemetry ${nextEnabled ? "enabled" : "disabled"}.`, nextEnabled);
+        ui.lastDebugRefreshAt = 0;
+        refreshDebugPanelMetrics();
+      } else if (action === "transmute") {
         systems.actions.manualTransmute();
         setNotice("Matter transmuted.", true);
         if (ui.activeTab !== "overview") {
@@ -1123,19 +1458,6 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       } else if (action.startsWith("expedition:view:")) {
         ui.expeditionsView = action.split(":")[2] || "runs";
         renderPanel();
-      } else if (action.startsWith("expedition:auto:")) {
-        const bandId = action.split(":")[2] || "";
-        const selectedMode = systems.expeditions.getStatus().autoRouteMode || "manual";
-        const modeToUse = selectedMode === "manual" ? "balanced" : selectedMode;
-        const modeResult = systems.expeditions.setAutoRouteMode(modeToUse);
-        if (!modeResult.ok) {
-          setNotice(modeResult.reason || "Unable to set auto mode.", false);
-          renderPanel();
-          return;
-        }
-        const result = systems.expeditions.start(bandId);
-        setNotice(result.ok ? `Auto expedition launched (${modeResult.mode}).` : result.reason, result.ok);
-        renderPanel();
       } else if (action.startsWith("expedition:mode:")) {
         const mode = action.split(":")[2] || "manual";
         const result = systems.expeditions.setAutoRouteMode(mode);
@@ -1144,13 +1466,37 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       } else if (action.startsWith("expedition:start:")) {
         const bandId = action.split(":")[2];
         const result = systems.expeditions.start(bandId);
-        setNotice(result.ok ? "Expedition launched." : result.reason, result.ok);
+        const mode = systems.expeditions.getStatus().autoRouteMode || "manual";
+        setNotice(result.ok ? `Expedition loop launched (${mode}).` : result.reason, result.ok);
         renderPanel();
-      } else if (action === "expedition:claim") {
-        const result = systems.expeditions.claim();
+      } else if (action === "expedition:claim-all") {
+        const preview = systems.expeditions.getClaimAllPreview();
+        if (!preview.ok) {
+          setNotice(preview.reason, false);
+          renderPanel();
+          return;
+        }
+        const rareDropNames = summarizeDropNames(preview.drops);
+        ui.activeTab = "expeditions";
+        ui.expeditionsView = "runs";
+        ui.chestClaimPopup = {
+          runCount: Math.max(0, Number(preview.runCount) || 0),
+          totalRewards: preview.totalRewards || { matter: 0, fire: 0, shards: 0, intel: 0 },
+          rareDropNames
+        };
+        renderPanel();
+      } else if (action === "expedition:claim-all:cancel") {
+        ui.chestClaimPopup = null;
+        renderPanel();
+      } else if (action === "expedition:claim-all:confirm") {
+        const result = systems.expeditions.claimChestAll();
+        ui.chestClaimPopup = null;
         const dropCount = Array.isArray(result.drops) ? result.drops.length : 0;
+        const runCount = Math.max(0, Number(result.runsClaimed) || 0);
         const claimNotice = result.ok
-          ? (dropCount > 0 ? `Expedition rewards claimed. ${dropCount} rare find(s) secured.` : "Expedition rewards claimed.")
+          ? (dropCount > 0
+            ? `Claimed ${runCount} reward runs from chest. ${dropCount} rare find(s) secured.`
+            : `Claimed ${runCount} reward runs from chest.`)
           : result.reason;
         setNotice(claimNotice, result.ok);
         renderPanel();
@@ -1194,6 +1540,18 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const result = systems.ships.equipPart(shipId, slotId, partId);
         setNotice(result.ok ? "Part equipped." : result.reason, result.ok);
         renderPanel();
+      } else if (action.startsWith("ship:combine:")) {
+        const encodedPartRef = action.split(":")[2] || "";
+        const partRef = decodeURIComponent(encodedPartRef);
+        const result = systems.ships.combinePart(partRef);
+        const partName = result.partId
+          ? (systems.ships.getStatus().partDefs?.[result.partId]?.name || result.partId)
+          : "Part";
+        const notice = result.ok
+          ? `${partName} fused to T${result.nextTier}.`
+          : result.reason;
+        setNotice(notice, result.ok);
+        renderPanel();
       } else if (action.startsWith("ship:unequip:")) {
         const shipId = action.split(":")[2];
         const slotId = action.split(":")[3];
@@ -1222,34 +1580,84 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       if (!ui.draggingPartId) {
         return null;
       }
-      return systems.ships.getStatus().partDefs?.[ui.draggingPartId] || null;
+      const parsed = systems.ships.parsePartRef?.(ui.draggingPartId);
+      if (!parsed) {
+        return null;
+      }
+      return systems.ships.getStatus().partDefs?.[parsed.partId] || null;
     }
 
     appEl.addEventListener("dragstart", (event) => {
       const itemEl = event.target.closest(".inventory-item[data-part-id]");
-      if (!itemEl) {
+      if (itemEl) {
+        ui.draggingPartId = itemEl.dataset.partId || "";
+        const sourceShipId = itemEl.dataset.shipId || systems.ships.getStatus().selectedShip;
+        ui.dragSourceType = "inventory";
+        ui.dragSourceSlot = "";
+        ui.dragSourceShipId = sourceShipId;
+        ui.dragDropHandled = false;
+        const payload = JSON.stringify({
+          partId: ui.draggingPartId,
+          slotId: itemEl.dataset.slot || "",
+          shipId: sourceShipId
+        });
+        event.dataTransfer?.setData("text/plain", payload);
+        event.dataTransfer.effectAllowed = "move";
+        itemEl.classList.add("dragging");
         return;
       }
-      ui.draggingPartId = itemEl.dataset.partId || "";
-      const sourceShipId = itemEl.dataset.shipId || systems.ships.getStatus().selectedShip;
+
+      const zoneEl = event.target.closest(".ship-zone[data-slot][data-equipped-ref]");
+      const equippedRef = zoneEl?.dataset.equippedRef || "";
+      if (!zoneEl || !equippedRef) {
+        return;
+      }
+
+      ui.draggingPartId = equippedRef;
+      ui.dragSourceType = "equipped-zone";
+      ui.dragSourceSlot = zoneEl.dataset.slot || "";
+      ui.dragSourceShipId = zoneEl.dataset.shipId || systems.ships.getStatus().selectedShip;
+      ui.dragDropHandled = false;
       const payload = JSON.stringify({
         partId: ui.draggingPartId,
-        slotId: itemEl.dataset.slot || "",
-        shipId: sourceShipId
+        slotId: ui.dragSourceSlot,
+        shipId: ui.dragSourceShipId,
+        source: "equipped-zone"
       });
       event.dataTransfer?.setData("text/plain", payload);
       event.dataTransfer.effectAllowed = "move";
-      itemEl.classList.add("dragging");
+      zoneEl.classList.add("dragging");
     });
 
     appEl.addEventListener("dragend", (event) => {
+      const sourceType = ui.dragSourceType;
+      const sourceShipId = ui.dragSourceShipId;
+      const sourceSlot = ui.dragSourceSlot;
+      const dropHandled = ui.dragDropHandled;
+
       const itemEl = event.target.closest(".inventory-item.dragging");
+      const zoneEl = event.target.closest(".ship-zone.dragging");
       if (itemEl) {
         itemEl.classList.remove("dragging");
       }
+      if (zoneEl) {
+        zoneEl.classList.remove("dragging");
+      }
+
       ui.draggingPartId = "";
       ui.dragHoverSlot = "";
+      ui.dragSourceType = "";
+      ui.dragSourceSlot = "";
+      ui.dragSourceShipId = "";
+      ui.dragDropHandled = false;
       clearShipDropTargets();
+
+      if (sourceType === "equipped-zone" && !dropHandled && sourceShipId && sourceSlot) {
+        const result = systems.ships.unequipPart(sourceShipId, sourceSlot);
+        setNotice(result.ok ? "Part unequipped." : result.reason, result.ok);
+        renderPanel();
+        refreshHud();
+      }
     });
 
     appEl.addEventListener("dragover", (event) => {
@@ -1286,7 +1694,16 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       if (!zoneEl) {
         return;
       }
+      if (!isExpeditionUnlocked()) {
+        clearShipDropTargets();
+        ui.draggingPartId = "";
+        ui.dragHoverSlot = "";
+        setNotice("Unlock Expedition Keystone in Ascend to manage ship parts.", false);
+        refreshHud();
+        return;
+      }
       event.preventDefault();
+      ui.dragDropHandled = true;
       let payload = null;
       const rawData = event.dataTransfer?.getData("text/plain") || "";
       if (rawData) {
@@ -1300,10 +1717,9 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       const partId = payload?.partId || ui.draggingPartId;
       const shipId = zoneEl.dataset.shipId || payload?.shipId || systems.ships.getStatus().selectedShip;
       const slotId = zoneEl.dataset.slot || "";
-      const partDef = systems.ships.getStatus().partDefs?.[partId] || null;
+      const parsedPart = systems.ships.parsePartRef?.(partId);
+      const partDef = parsedPart ? systems.ships.getStatus().partDefs?.[parsedPart.partId] || null : null;
       clearShipDropTargets();
-      ui.draggingPartId = "";
-      ui.dragHoverSlot = "";
 
       if (!partId || !shipId || !slotId) {
         return;
@@ -1322,7 +1738,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         return;
       }
 
-      const result = systems.ships.equipPart(shipId, slotId, partId);
+      const result = systems.ships.equipPart(shipId, slotId, parsedPart?.ref || partId);
       setNotice(result.ok ? "Part equipped." : result.reason, result.ok);
       renderPanel();
       refreshHud();
@@ -1341,6 +1757,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     buildLayout();
     bindEvents();
     renderPanel();
+    renderDebugPanel();
     refreshHud();
   }
 
@@ -1348,22 +1765,39 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const rates = formulas.productionPerSecond(state, generatorDefs);
     const ascendGain = Math.max(1, ascendShardGainFromResources(state));
     const ascendCostValues = ascendCost(state);
+    const expeditionStatus = systems.expeditions.getStatus();
+    const expeditionUnlocked = Boolean(expeditionStatus.unlocked);
+    const chest = expeditionStatus.rewardsChest || { capacity: 10, items: [] };
+    const chestItems = Array.isArray(chest.items) ? chest.items : [];
+    const chestCount = chestItems.length;
 
     refs.matter.textContent = formatNumber(state.resources.matter);
     refs.fire.textContent = formatNumber(state.resources.fire);
     refs.shards.textContent = formatNumber(state.resources.shards);
     refs.intel.textContent = formatNumber(state.expeditions?.meta?.intel || 0);
-    refs.prodMultiplier.textContent = `x${state.perks.productionMultiplier.toFixed(2)}`;
+    refs.prodInline.textContent = `x${state.perks.productionMultiplier.toFixed(2)}`;
+
+    refs.intelCard.classList.toggle("is-locked", !expeditionUnlocked);
+    refs.intelHint.textContent = expeditionUnlocked ? "Runs and ship upgrades" : "Unlock Expedition Keystone";
+    refs.intelAction.disabled = !expeditionUnlocked;
+    if (refs.expeditionsTab) {
+      refs.expeditionsTab.disabled = !expeditionUnlocked;
+    }
+    if (!expeditionUnlocked && ui.activeTab === "expeditions") {
+      ui.activeTab = "ascend";
+      ui.expeditionsView = "runs";
+      renderPanel();
+    }
 
     const clickBase = (balance.baseClickMatter + state.perks.clickMatterBonus) * state.perks.clickMultiplier;
     const clickFire = state.perks.clickFireBonus;
-    const clickFireText = clickFire > 0 ? ` +${formatNumber(clickFire)} Fire` : "";
-    refs.transmuteYield.textContent = `+${formatNumber(clickBase)} Matter${clickFireText}`;
+    const clickFireText = clickFire > 0 ? ` +${formatNumber(clickFire)}F` : "";
+    refs.transmuteYield.textContent = `+${formatNumber(clickBase)} Matter/tap${clickFireText}`;
     const conversionBase = balance.elementConversionCost * state.perks.conversionCostMultiplier;
     const conversionCost = Math.max(1, Math.floor(conversionBase - state.perks.conversionCostFlatReduction));
     const conversionOut = (1 + state.perks.conversionFireBonus) * state.perks.conversionYieldMultiplier;
-    refs.convertYield.textContent = `${formatNumber(conversionCost)} Matter -> ${formatNumber(conversionOut)} Fire`;
-    refs.ascendGain.textContent = `Cost: ${formatNumber(ascendCostValues.matterCost)} Matter + ${formatNumber(ascendCostValues.fireCost)} Fire | Gain: +${formatNumber(ascendGain)} Shards`;
+    refs.convertYield.textContent = `${formatNumber(conversionCost)}M -> ${formatNumber(conversionOut)}F`;
+    refs.ascendGain.textContent = `${formatNumber(ascendCostValues.matterCost)}M + ${formatNumber(ascendCostValues.fireCost)}F -> +${formatNumber(ascendGain)}S`;
     refs.rate.textContent = `${formatNumber(rates.matter)}/s Matter | ${formatNumber(rates.fire)}/s Fire`;
 
     refs.convertButton.disabled = state.resources.matter < conversionCost;
@@ -1373,6 +1807,18 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     refs.notice.textContent = ui.notice;
     refs.notice.classList.toggle("good", ui.good);
+
+    if (ui.chestClaimPopup && chestCount === 0) {
+      ui.chestClaimPopup = null;
+    }
+
+    if (ui.debugPanelVisible) {
+      const now = Date.now();
+      if (now - ui.lastDebugRefreshAt >= 250) {
+        ui.lastDebugRefreshAt = now;
+        refreshDebugPanelMetrics();
+      }
+    }
 
     if (ui.activeTab === "expeditions") {
       const nextSignature = getExpeditionRenderSignature();
@@ -1385,5 +1831,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     }
   }
 
-  return { start, setNotice, refreshHud };
+  return {
+    start,
+    setNotice,
+    refreshHud,
+    toggleDebugPanel
+  };
 }

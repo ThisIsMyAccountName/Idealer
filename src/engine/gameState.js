@@ -1,7 +1,135 @@
+const CURRENT_STATE_VERSION = "0.6.0";
+const PART_TIER_SUFFIX_RE = /@t(\d+)$/i;
+
+function clampInt(value, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = Math.floor(Number(value) || 0);
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function sanitizeRewardPayload(rewards) {
+  return {
+    matter: clampInt(rewards?.matter),
+    fire: clampInt(rewards?.fire),
+    shards: clampInt(rewards?.shards),
+    intel: clampInt(rewards?.intel)
+  };
+}
+
+function createPartRef(partId, tier = 1) {
+  const cleanPartId = typeof partId === "string" ? partId.trim() : "";
+  if (!cleanPartId) {
+    return "";
+  }
+  const safeTier = clampInt(tier, 1, 99);
+  return safeTier <= 1 ? cleanPartId : `${cleanPartId}@t${safeTier}`;
+}
+
+function parsePartRef(partRef) {
+  if (typeof partRef !== "string") {
+    return null;
+  }
+  const raw = partRef.trim();
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(PART_TIER_SUFFIX_RE);
+  if (!match) {
+    return { partId: raw, tier: 1, ref: raw };
+  }
+  const partId = raw.slice(0, match.index);
+  if (!partId) {
+    return null;
+  }
+  const tier = clampInt(match[1], 1, 99);
+  return {
+    partId,
+    tier,
+    ref: createPartRef(partId, tier)
+  };
+}
+
+function sanitizePartRef(partRef) {
+  const parsed = parsePartRef(partRef);
+  return parsed ? parsed.ref : null;
+}
+
+function normalizePartInventoryMap(partInventory) {
+  const source = partInventory && typeof partInventory === "object" ? partInventory : {};
+  const normalized = {};
+  Object.entries(source).forEach(([rawRef, value]) => {
+    const parsed = parsePartRef(rawRef);
+    if (!parsed) {
+      return;
+    }
+    const count = clampInt(value);
+    if (count <= 0) {
+      return;
+    }
+    normalized[parsed.ref] = (normalized[parsed.ref] || 0) + count;
+  });
+  return normalized;
+}
+
+function sanitizeChestItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const routeHistory = Array.isArray(item.routeHistory)
+    ? item.routeHistory
+      .map((step) => ({
+        stage: clampInt(step?.stage, 0),
+        id: typeof step?.id === "string" ? step.id : "",
+        name: typeof step?.name === "string" ? step.name : ""
+      }))
+      .filter((step) => step.id || step.name)
+    : [];
+
+  const encounters = Array.isArray(item.encounters)
+    ? item.encounters
+      .map((entry) => ({
+        stage: clampInt(entry?.stage, 0),
+        poolId: typeof entry?.poolId === "string" ? entry.poolId : "",
+        name: typeof entry?.name === "string" ? entry.name : "",
+        description: typeof entry?.description === "string" ? entry.description : "",
+        success: Boolean(entry?.success),
+        drop: typeof entry?.drop === "string" ? entry.drop : ""
+      }))
+      .filter((entry) => entry.name)
+    : [];
+
+  const drops = Array.isArray(item.drops)
+    ? item.drops
+      .map((drop) => ({
+        id: typeof drop?.id === "string" ? drop.id : "",
+        name: typeof drop?.name === "string" ? drop.name : "",
+        rarity: typeof drop?.rarity === "string" ? drop.rarity : "rare",
+        blueprintForShip: typeof drop?.blueprintForShip === "string" ? drop.blueprintForShip : null,
+        slot: typeof drop?.slot === "string" ? drop.slot : null,
+        shipId: typeof drop?.shipId === "string" ? drop.shipId : null,
+        effects: drop?.effects && typeof drop.effects === "object" ? drop.effects : null
+      }))
+      .filter((drop) => drop.id)
+    : [];
+
+  return {
+    success: Boolean(item.success),
+    bandId: typeof item.bandId === "string" ? item.bandId : "",
+    bandName: typeof item.bandName === "string" ? item.bandName : "Unknown Route",
+    finalRisk: Math.max(0, Number(item.finalRisk) || 0),
+    shipId: typeof item.shipId === "string" ? item.shipId : null,
+    routeHistory,
+    encounters,
+    drops,
+    rewards: sanitizeRewardPayload(item.rewards),
+    completedAt: clampInt(item.completedAt, 0)
+  };
+}
+
 export function createInitialState() {
   return {
     meta: {
-      version: "0.4.0",
+      version: CURRENT_STATE_VERSION,
       startedAt: Date.now(),
       lastTickAt: Date.now(),
       lastSavedAt: Date.now(),
@@ -38,7 +166,12 @@ export function createInitialState() {
         failedRuns: 0,
         bestBand: 0,
         autoRouteMode: "manual",
-        intelPressure: {}
+        intelPressure: {},
+        continuous: {
+          active: false,
+          bandId: null,
+          stopReason: ""
+        }
       },
       selectedShip: "raft",
       ships: {
@@ -105,6 +238,10 @@ export function createInitialState() {
       },
       blueprintInventory: {},
       partInventory: {},
+      rewardsChest: {
+        capacity: 10,
+        items: []
+      },
       activeRun: null,
       pendingRewards: null
     },
@@ -133,7 +270,8 @@ export function createInitialState() {
       expeditionSpeedMultiplier: 1,
       expeditionRiskMitigation: 0,
       expeditionShardBonus: 0,
-      expeditionIntelMultiplier: 1
+      expeditionIntelMultiplier: 1,
+      partTierCapBonus: 0
     }
   };
 }
@@ -145,6 +283,7 @@ export function sanitizeState(state) {
   }
 
   safe.meta = { ...safe.meta, ...(state.meta || {}) };
+  safe.meta.version = CURRENT_STATE_VERSION;
   safe.resources = { ...safe.resources, ...(state.resources || {}) };
   safe.lifetime = { ...safe.lifetime, ...(state.lifetime || {}) };
   safe.generators = { ...safe.generators, ...(state.generators || {}) };
@@ -201,10 +340,10 @@ export function sanitizeState(state) {
       net: Math.max(0, Math.floor(Number(ship.facilities?.net) || 0))
     };
     ship.equippedParts = {
-      hull: typeof ship.equippedParts?.hull === "string" ? ship.equippedParts.hull : null,
-      sail: typeof ship.equippedParts?.sail === "string" ? ship.equippedParts.sail : null,
-      anchor: typeof ship.equippedParts?.anchor === "string" ? ship.equippedParts.anchor : null,
-      net: typeof ship.equippedParts?.net === "string" ? ship.equippedParts.net : null
+      hull: sanitizePartRef(ship.equippedParts?.hull),
+      sail: sanitizePartRef(ship.equippedParts?.sail),
+      anchor: sanitizePartRef(ship.equippedParts?.anchor),
+      net: sanitizePartRef(ship.equippedParts?.net)
     };
     safe.expeditions.ships[shipId] = ship;
   });
@@ -214,9 +353,7 @@ export function sanitizeState(state) {
   Object.keys(safe.expeditions.blueprintInventory || {}).forEach((key) => {
     safe.expeditions.blueprintInventory[key] = Math.max(0, Math.floor(Number(safe.expeditions.blueprintInventory[key]) || 0));
   });
-  Object.keys(safe.expeditions.partInventory || {}).forEach((key) => {
-    safe.expeditions.partInventory[key] = Math.max(0, Math.floor(Number(safe.expeditions.partInventory[key]) || 0));
-  });
+  safe.expeditions.partInventory = normalizePartInventoryMap(safe.expeditions.partInventory);
   safe.expeditions.meta.intel = Math.max(0, Number(safe.expeditions.meta.intel) || 0);
   safe.expeditions.meta.completedRuns = Math.max(0, Math.floor(Number(safe.expeditions.meta.completedRuns) || 0));
   safe.expeditions.meta.failedRuns = Math.max(0, Math.floor(Number(safe.expeditions.meta.failedRuns) || 0));
@@ -236,12 +373,39 @@ export function sanitizeState(state) {
     };
   });
   safe.expeditions.meta.intelPressure = pressure;
+
+  const continuous = safe.expeditions.meta.continuous && typeof safe.expeditions.meta.continuous === "object"
+    ? safe.expeditions.meta.continuous
+    : {};
+  safe.expeditions.meta.continuous = {
+    active: Boolean(continuous.active),
+    bandId: typeof continuous.bandId === "string" ? continuous.bandId : null,
+    stopReason: typeof continuous.stopReason === "string" ? continuous.stopReason : ""
+  };
+  if (!safe.expeditions.meta.continuous.active) {
+    safe.expeditions.meta.continuous.bandId = null;
+  }
+
+  const legacyPending = sanitizeChestItem(safe.expeditions.pendingRewards);
+  const chest = safe.expeditions.rewardsChest && typeof safe.expeditions.rewardsChest === "object"
+    ? safe.expeditions.rewardsChest
+    : {};
+  const chestCapacity = clampInt(chest.capacity, 1, 200) || 10;
+  const chestItems = Array.isArray(chest.items)
+    ? chest.items.map(sanitizeChestItem).filter(Boolean)
+    : [];
+  if (legacyPending) {
+    chestItems.unshift(legacyPending);
+  }
+  safe.expeditions.rewardsChest = {
+    capacity: chestCapacity,
+    items: chestItems.slice(0, chestCapacity)
+  };
+
   if (!safe.expeditions.activeRun || typeof safe.expeditions.activeRun !== "object") {
     safe.expeditions.activeRun = null;
   }
-  if (!safe.expeditions.pendingRewards || typeof safe.expeditions.pendingRewards !== "object") {
-    safe.expeditions.pendingRewards = null;
-  }
+  safe.expeditions.pendingRewards = null;
   safe.perks.productionMultiplier = Math.max(1, Number(safe.perks.productionMultiplier) || 1);
   safe.perks.matterRateMultiplier = Math.max(1, Number(safe.perks.matterRateMultiplier) || 1);
   safe.perks.fireRateMultiplier = Math.max(1, Number(safe.perks.fireRateMultiplier) || 1);
@@ -267,6 +431,7 @@ export function sanitizeState(state) {
   safe.perks.expeditionRiskMitigation = Math.max(0, Number(safe.perks.expeditionRiskMitigation) || 0);
   safe.perks.expeditionShardBonus = Math.max(0, Number(safe.perks.expeditionShardBonus) || 0);
   safe.perks.expeditionIntelMultiplier = Math.max(0.25, Number(safe.perks.expeditionIntelMultiplier) || 1);
+  safe.perks.partTierCapBonus = clampInt(safe.perks.partTierCapBonus, 0, 99);
 
   return safe;
 }

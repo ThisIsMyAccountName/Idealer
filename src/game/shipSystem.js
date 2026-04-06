@@ -20,21 +20,227 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
       map[entry.id] = entry;
       return map;
     }, {});
+  const PART_TIER_SUFFIX_RE = /@t(\d+)$/i;
+
+  function getFusionSettings() {
+    const raw = expeditionBalance.partFusion && typeof expeditionBalance.partFusion === "object"
+      ? expeditionBalance.partFusion
+      : {};
+    return {
+      baseMaxTier: Math.max(1, Math.floor(Number(raw.baseMaxTier) || 6)),
+      linearEffectPerTier: Math.max(0, Number(raw.linearEffectPerTier) || 0.2),
+      maxTierBonusPerk: typeof raw.maxTierBonusPerk === "string" && raw.maxTierBonusPerk
+        ? raw.maxTierBonusPerk
+        : "partTierCapBonus",
+      partScaleOverrides: raw.partScaleOverrides && typeof raw.partScaleOverrides === "object"
+        ? raw.partScaleOverrides
+        : {},
+      partMaxTierOverrides: raw.partMaxTierOverrides && typeof raw.partMaxTierOverrides === "object"
+        ? raw.partMaxTierOverrides
+        : {}
+    };
+  }
+
+  function createPartRef(partId, tier = 1) {
+    const cleanPartId = typeof partId === "string" ? partId.trim() : "";
+    if (!cleanPartId) {
+      return "";
+    }
+    const safeTier = Math.max(1, Math.floor(Number(tier) || 1));
+    return safeTier <= 1 ? cleanPartId : `${cleanPartId}@t${safeTier}`;
+  }
+
+  function parsePartRef(partRef) {
+    if (typeof partRef !== "string") {
+      return null;
+    }
+    const raw = partRef.trim();
+    if (!raw) {
+      return null;
+    }
+    const suffixMatch = raw.match(PART_TIER_SUFFIX_RE);
+    if (!suffixMatch) {
+      return {
+        raw,
+        partId: raw,
+        tier: 1,
+        ref: raw
+      };
+    }
+    const partId = raw.slice(0, suffixMatch.index);
+    if (!partId) {
+      return null;
+    }
+    const tier = Math.max(1, Math.floor(Number(suffixMatch[1]) || 1));
+    return {
+      raw,
+      partId,
+      tier,
+      ref: createPartRef(partId, tier)
+    };
+  }
+
+  function normalizePartInventory() {
+    const source = state.expeditions.partInventory && typeof state.expeditions.partInventory === "object"
+      ? state.expeditions.partInventory
+      : {};
+    const normalized = {};
+    Object.entries(source).forEach(([rawRef, value]) => {
+      const parsed = parsePartRef(rawRef);
+      if (!parsed) {
+        return;
+      }
+      const count = Math.max(0, Math.floor(Number(value) || 0));
+      if (count <= 0) {
+        return;
+      }
+      normalized[parsed.ref] = (normalized[parsed.ref] || 0) + count;
+    });
+    state.expeditions.partInventory = normalized;
+    return normalized;
+  }
+
+  function getGlobalPartTierCapBonus() {
+    const settings = getFusionSettings();
+    const perkKey = settings.maxTierBonusPerk;
+    return Math.max(0, Math.floor(Number(state.perks?.[perkKey]) || 0));
+  }
+
+  function getPartFusionCap(partId) {
+    const settings = getFusionSettings();
+    const globalCap = settings.baseMaxTier + getGlobalPartTierCapBonus();
+    const override = Math.max(0, Math.floor(Number(settings.partMaxTierOverrides?.[partId]) || 0));
+    const resolved = override > 0 ? override : globalCap;
+    return Math.max(1, Math.min(99, resolved));
+  }
+
+  function getPartTierScale(partId, tier) {
+    const settings = getFusionSettings();
+    const override = Number(settings.partScaleOverrides?.[partId]);
+    const linearStep = Number.isFinite(override) ? Math.max(0, override) : settings.linearEffectPerTier;
+    const safeTier = Math.max(1, Math.floor(Number(tier) || 1));
+    return 1 + (safeTier - 1) * linearStep;
+  }
 
   function getEquippedPartCounts() {
     const counts = {};
     Object.values(state.expeditions.ships || {}).forEach((ship) => {
-      Object.values(ship?.equippedParts || {}).forEach((partId) => {
-        if (!partId || typeof partId !== "string") {
+      Object.values(ship?.equippedParts || {}).forEach((rawRef) => {
+        const parsed = parsePartRef(rawRef);
+        if (!parsed) {
           return;
         }
-        counts[partId] = (counts[partId] || 0) + 1;
+        counts[parsed.ref] = (counts[parsed.ref] || 0) + 1;
       });
     });
     return counts;
   }
 
+  function getPartAvailability(partRef) {
+    const inventory = normalizePartInventory();
+    const parsed = parsePartRef(partRef);
+    if (!parsed) {
+      return { total: 0, equipped: 0, available: 0, ref: "" };
+    }
+    const equippedCounts = getEquippedPartCounts();
+    const total = Math.max(0, Number(inventory[parsed.ref]) || 0);
+    const equipped = Math.max(0, Number(equippedCounts[parsed.ref]) || 0);
+    return {
+      total,
+      equipped,
+      available: Math.max(0, total - equipped),
+      ref: parsed.ref
+    };
+  }
+
+  function getCombineInfo(partRef) {
+    const parsed = parsePartRef(partRef);
+    if (!parsed) {
+      return { ok: false, reason: "Unknown part reference." };
+    }
+    const part = partDefs[parsed.partId];
+    if (!part) {
+      return { ok: false, reason: "Unknown part." };
+    }
+    const maxTier = getPartFusionCap(parsed.partId);
+    if (parsed.tier >= maxTier) {
+      return {
+        ok: false,
+        reason: `Tier cap reached (T${maxTier}).`,
+        partId: parsed.partId,
+        tier: parsed.tier,
+        maxTier,
+        fromRef: parsed.ref,
+        toRef: parsed.ref,
+        nextTier: parsed.tier
+      };
+    }
+    const availability = getPartAvailability(parsed.ref);
+    if (availability.available < 2) {
+      return {
+        ok: false,
+        reason: "Need 2 unequipped copies of this part tier.",
+        partId: parsed.partId,
+        tier: parsed.tier,
+        maxTier,
+        fromRef: parsed.ref,
+        toRef: createPartRef(parsed.partId, parsed.tier + 1),
+        nextTier: parsed.tier + 1,
+        available: availability.available,
+        required: 2
+      };
+    }
+    return {
+      ok: true,
+      partId: parsed.partId,
+      tier: parsed.tier,
+      maxTier,
+      fromRef: parsed.ref,
+      toRef: createPartRef(parsed.partId, parsed.tier + 1),
+      nextTier: parsed.tier + 1,
+      available: availability.available,
+      required: 2
+    };
+  }
+
+  function combinePart(partRef) {
+    const combineInfo = getCombineInfo(partRef);
+    if (!combineInfo.ok) {
+      return combineInfo;
+    }
+
+    const inventory = normalizePartInventory();
+    const fromCount = Math.max(0, Number(inventory[combineInfo.fromRef]) || 0);
+    if (fromCount < 2) {
+      return { ok: false, reason: "Not enough parts available for fusion." };
+    }
+
+    const remaining = fromCount - 2;
+    if (remaining > 0) {
+      inventory[combineInfo.fromRef] = remaining;
+    } else {
+      delete inventory[combineInfo.fromRef];
+    }
+    inventory[combineInfo.toRef] = Math.max(0, Number(inventory[combineInfo.toRef]) || 0) + 1;
+
+    eventBus.emit("ship:partCombined", {
+      partId: combineInfo.partId,
+      fromRef: combineInfo.fromRef,
+      toRef: combineInfo.toRef,
+      fromTier: combineInfo.tier,
+      toTier: combineInfo.nextTier
+    });
+
+    return {
+      ok: true,
+      ...combineInfo,
+      remainingFromCount: Math.max(0, Number(inventory[combineInfo.fromRef]) || 0),
+      toCount: Math.max(0, Number(inventory[combineInfo.toRef]) || 0)
+    };
+  }
+
   function getShipStats(shipId) {
+    normalizePartInventory();
     const shipState = ensureShip(state, shipId);
     const shipDef = shipDefs[shipId];
     if (!shipState || !shipDef) {
@@ -62,20 +268,22 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
       stats.penaltyDampening += (def.effectsPerLevel.penaltyDampening || 0) * n;
     });
 
-    Object.entries(shipState.equippedParts || {}).forEach(([slotId, partId]) => {
-      if (!partId || typeof partId !== "string") {
+    Object.entries(shipState.equippedParts || {}).forEach(([slotId, rawRef]) => {
+      const parsed = parsePartRef(rawRef);
+      if (!parsed) {
         return;
       }
-      const part = partDefs[partId];
+      const part = partDefs[parsed.partId];
       if (!part || part.slot !== slotId) {
         return;
       }
+      const scale = getPartTierScale(parsed.partId, parsed.tier);
       const effects = part.effects || {};
-      stats.speedMultiplier *= 1 + (effects.speedMultiplier || 0);
-      stats.yieldMultiplier *= 1 + (effects.yieldMultiplier || 0);
-      stats.rareDropWeight *= 1 + (effects.rareDropWeight || 0);
-      stats.riskMitigation += effects.riskMitigation || 0;
-      stats.penaltyDampening += effects.penaltyDampening || 0;
+      stats.speedMultiplier *= 1 + (effects.speedMultiplier || 0) * scale;
+      stats.yieldMultiplier *= 1 + (effects.yieldMultiplier || 0) * scale;
+      stats.rareDropWeight *= 1 + (effects.rareDropWeight || 0) * scale;
+      stats.riskMitigation += (effects.riskMitigation || 0) * scale;
+      stats.penaltyDampening += (effects.penaltyDampening || 0) * scale;
     });
 
     stats.riskMitigation = Math.max(0, Math.min(0.9, stats.riskMitigation));
@@ -189,6 +397,7 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
   }
 
   function equipPart(shipId, slotId, partId) {
+    normalizePartInventory();
     const shipState = ensureShip(state, shipId);
     if (!shipState) {
       return { ok: false, reason: "Unknown ship." };
@@ -196,9 +405,18 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
     if (!shipState.acquired) {
       return { ok: false, reason: "Ship not acquired." };
     }
-    const part = partDefs[partId];
+    const parsed = parsePartRef(partId);
+    if (!parsed) {
+      return { ok: false, reason: "Unknown part." };
+    }
+    const ref = parsed.ref;
+    const part = partDefs[parsed.partId];
     if (!part) {
       return { ok: false, reason: "Unknown part." };
+    }
+    const cap = getPartFusionCap(parsed.partId);
+    if (parsed.tier > cap) {
+      return { ok: false, reason: `Part tier exceeds cap (T${cap}).` };
     }
     if (part.slot !== slotId) {
       return { ok: false, reason: `Part fits ${part.slot}, not ${slotId}.` };
@@ -206,20 +424,21 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
     if (part.shipId && part.shipId !== shipId) {
       return { ok: false, reason: `Part is restricted to ${part.shipId}.` };
     }
-    if ((state.expeditions.partInventory[partId] || 0) <= 0) {
+    if ((state.expeditions.partInventory[ref] || 0) <= 0) {
       return { ok: false, reason: "Part not in inventory." };
     }
 
     const equippedCounts = getEquippedPartCounts();
-    const currentlyEquipped = shipState.equippedParts?.[slotId] === partId;
-    const allocation = Number(equippedCounts[partId]) || 0;
-    const totalOwned = Math.max(0, Number(state.expeditions.partInventory[partId]) || 0);
+    const slotRef = parsePartRef(shipState.equippedParts?.[slotId]);
+    const currentlyEquipped = slotRef?.ref === ref;
+    const allocation = Number(equippedCounts[ref]) || 0;
+    const totalOwned = Math.max(0, Number(state.expeditions.partInventory[ref]) || 0);
     if (!currentlyEquipped && allocation >= totalOwned) {
       return { ok: false, reason: "All copies of this part are already equipped." };
     }
 
-    shipState.equippedParts[slotId] = partId;
-    eventBus.emit("ship:partEquipped", { shipId, slotId, partId });
+    shipState.equippedParts[slotId] = ref;
+    eventBus.emit("ship:partEquipped", { shipId, slotId, partId: ref, basePartId: parsed.partId, tier: parsed.tier });
     return { ok: true };
   }
 
@@ -239,7 +458,10 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
   }
 
   function getStatus() {
+    normalizePartInventory();
     const equippedPartCounts = getEquippedPartCounts();
+    const fusionSettings = getFusionSettings();
+    const tierBonus = getGlobalPartTierCapBonus();
     return {
       selectedShip: state.expeditions.selectedShip,
       ships: state.expeditions.ships,
@@ -248,13 +470,25 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
       partDefs,
       equippedPartCounts,
       blueprintInventory: state.expeditions.blueprintInventory,
-      partInventory: state.expeditions.partInventory
+      partInventory: state.expeditions.partInventory,
+      partFusion: {
+        baseMaxTier: fusionSettings.baseMaxTier,
+        linearEffectPerTier: fusionSettings.linearEffectPerTier,
+        maxTierBonus: tierBonus,
+        effectiveGlobalMaxTier: fusionSettings.baseMaxTier + tierBonus
+      }
     };
   }
 
   return {
     getStatus,
     getShipStats,
+    parsePartRef,
+    createPartRef,
+    getPartFusionCap,
+    getPartTierScale,
+    getCombineInfo,
+    combinePart,
     isShipUnlockMet,
     buyShip,
     selectShip,

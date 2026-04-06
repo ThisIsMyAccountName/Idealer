@@ -26,16 +26,17 @@ export function recomputePerks({ state, balance, ascendNodes }) {
     expeditionSpeedMultiplier: 1,
     expeditionRiskMitigation: 0,
     expeditionShardBonus: 0,
-    expeditionIntelMultiplier: 1
+    expeditionIntelMultiplier: 1,
+    partTierCapBonus: 0
   };
 
   const kineticGloves = (state.upgrades.kineticGloves || 0) * upgradePower;
   if (kineticGloves > 0) {
-    perks.clickMatterBonus += kineticGloves * 0.24;
+    perks.clickMatterBonus += kineticGloves * 0.08;
   }
   const alloyIntake = (state.upgrades.alloyIntake || 0) * upgradePower;
   if (alloyIntake > 0) {
-    perks.matterRateMultiplier *= Math.pow(1.0015, alloyIntake);
+    perks.matterRateMultiplier *= Math.pow(1.0025, alloyIntake);
   }
   const emberCatalyst = (state.upgrades.emberCatalyst || 0) * upgradePower;
   if (emberCatalyst > 0) {
@@ -51,7 +52,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const fluxPistons = (state.upgrades.fluxPistons || 0) * upgradePower;
   if (fluxPistons > 0) {
-    perks.generatorCostGrowthMultiplier *= Math.pow(0.998, fluxPistons);
+    perks.generatorCostGrowthMultiplier *= Math.pow(0.9985, fluxPistons);
   }
   const cinderThreads = (state.upgrades.cinderThreads || 0) * upgradePower;
   if (cinderThreads > 0) {
@@ -88,7 +89,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
 
   const runicGrip = (state.upgrades.runicGrip || 0) * upgradePower;
   if (runicGrip > 0) {
-    perks.clickMultiplier *= Math.pow(1.002, runicGrip);
+    perks.clickMultiplier *= Math.pow(1.0035, runicGrip);
   }
   const emberEcho = (state.upgrades.emberEcho || 0) * upgradePower;
   if (emberEcho > 0) {
@@ -147,7 +148,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const fluxRelay = (state.upgrades.fluxRelay || 0) * upgradePower;
   if (fluxRelay > 0) {
-    perks.generatorCostGrowthMultiplier *= Math.pow(0.999, fluxRelay);
+    perks.generatorCostGrowthMultiplier *= Math.pow(0.9993, fluxRelay);
   }
 
   const thermoLevel = state.research.arcaneThermodynamics || 0;
@@ -197,7 +198,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
 
   const cryoCalibration = state.research.cryoCalibration || 0;
   if (cryoCalibration > 0) {
-    perks.generatorCostGrowthMultiplier *= 1 - cryoCalibration * 0.005;
+    perks.generatorCostGrowthMultiplier *= 1 - cryoCalibration * 0.004;
   }
 
   const ambientCharge = state.research.ambientCharge || 0;
@@ -270,7 +271,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const matrixDamping = state.research.matrixDamping || 0;
   if (matrixDamping > 0) {
-    perks.generatorCostGrowthMultiplier *= 1 - matrixDamping * 0.02;
+    perks.generatorCostGrowthMultiplier *= 1 - matrixDamping * 0.015;
   }
   const shardFractal = state.research.shardFractal || 0;
   if (shardFractal > 0) {
@@ -333,6 +334,9 @@ export function recomputePerks({ state, balance, ascendNodes }) {
       if (effect.expeditionIntelMultiplier) {
         perks.expeditionIntelMultiplier *= effect.expeditionIntelMultiplier;
       }
+      if (effect.partTierCapBonus) {
+        perks.partTierCapBonus += Number(effect.partTierCapBonus) || 0;
+      }
     });
   }
 
@@ -353,6 +357,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   perks.expeditionYieldMultiplier = clampMin(perks.expeditionYieldMultiplier, 0.05);
   perks.expeditionSpeedMultiplier = clampMin(perks.expeditionSpeedMultiplier, 0.05);
   perks.expeditionIntelMultiplier = clampMin(perks.expeditionIntelMultiplier, 0.05);
+  perks.partTierCapBonus = Math.max(0, Math.floor(Number(perks.partTierCapBonus) || 0));
   state.perks = perks;
   return perks;
 }

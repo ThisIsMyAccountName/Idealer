@@ -10,30 +10,30 @@ export const BALANCE = {
   ascendBaseMatter: 500,
   ascendBaseFire: 5,
   ascendCostGrowth: 1.6,
-  generatorCostGrowth: 1.15,
+  generatorCostGrowth: 1.13,
   generators: {
     furnace: {
       id: "furnace",
       name: "Furnace",
       resource: "matter",
-      baseRate: 0.1,
-      baseCost: 10,
+      baseRate: 0.12,
+      baseCost: 14,
       costResource: "matter"
     },
     condenser: {
       id: "condenser",
       name: "Condenser",
       resource: "matter",
-      baseRate: 0.35,
-      baseCost: 200,
+      baseRate: 0.48,
+      baseCost: 140,
       costResource: "matter"
     },
     prism: {
       id: "prism",
       name: "Element Prism",
       resource: "fire",
-      baseRate: 0.05,
-      baseCost: 25,
+      baseRate: 0.08,
+      baseCost: 16,
       costResource: "fire"
     }
   },
@@ -100,9 +100,9 @@ export const BALANCE = {
   ],
   upgradeCostDefaults: {
     quadCap: 35,
-    quadScale: 0.015,
+    quadScale: 0.013,
     targetEnd: 1e31,
-    unlockCostFactor: 1,
+    unlockCostFactor: 0.9,
     autoBalance: true
   },
   researchCostDefaults: {
@@ -714,16 +714,16 @@ export const BALANCE = {
     kineticGloves: {
       id: "kineticGloves",
       name: "Kinetic Gloves",
-      description: "+0.24 Matter per click",
+      description: "+0.08 Matter per click",
       costResource: "matter",
       maxTier: 999,
-      baseCost: 120,
+      baseCost: 90,
       costCurve: { autoBalance: false }
     },
     alloyIntake: {
       id: "alloyIntake",
       name: "Alloy Intake",
-      description: "+0.15% Matter production",
+      description: "+0.25% Matter production",
       costResource: "matter",
       maxTier: 999,
       baseCost: 450
@@ -755,7 +755,7 @@ export const BALANCE = {
     fluxPistons: {
       id: "fluxPistons",
       name: "Flux Pistons",
-      description: "-0.2% generator cost growth",
+      description: "-0.15% generator cost growth",
       costResource: "matter",
       maxTier: 999,
       baseCost: 2600
@@ -827,7 +827,7 @@ export const BALANCE = {
     runicGrip: {
       id: "runicGrip",
       name: "Runic Grip",
-      description: "+0.2% click power",
+      description: "+0.35% click power",
       costResource: "matter",
       maxTier: 999,
       baseCost: 280
@@ -939,7 +939,7 @@ export const BALANCE = {
     fluxRelay: {
       id: "fluxRelay",
       name: "Flux Relay",
-      description: "-0.1% generator cost growth",
+      description: "-0.07% generator cost growth",
       costResource: "matter",
       maxTier: 999,
       baseCost: 3600
@@ -1039,7 +1039,7 @@ export const BALANCE = {
     cryoCalibration: {
       id: "cryoCalibration",
       name: "Cryo Calibration",
-      description: "-0.5% generator cost growth",
+      description: "-0.4% generator cost growth",
       maxLevel: 4,
       baseCost: 28,
       costGrowth: 1.72,
@@ -1209,7 +1209,7 @@ export const BALANCE = {
     matrixDamping: {
       id: "matrixDamping",
       name: "Matrix Damping",
-      description: "-2% generator cost growth",
+      description: "-1.5% generator cost growth",
       maxLevel: 4,
       baseCost: 40,
       costGrowth: 1.7,

@@ -22,12 +22,112 @@ function cloneRewards() {
 }
 
 const AUTO_ROUTE_MODES = new Set(["manual", "safe", "balanced", "aggressive"]);
+const CONTINUOUS_STOP_MESSAGES = {
+  chestFull: "Rewards chest is full.",
+  insufficientResources: "Not enough resources to relaunch.",
+  cancelled: "Expedition cancelled.",
+  blocked: "Automatic relaunch was blocked."
+};
 
 export function createExpeditionSystem({ state, resourceManager, eventBus, balance, shipSystem }) {
   const expeditionBalance = balance.expeditions || {};
   const bandDefs = expeditionBalance.bands || [];
   const unlockNodeId = expeditionBalance.unlockNodeId;
   const shipDefs = expeditionBalance.ships || {};
+
+  function getContinuousConfig() {
+    const config = expeditionBalance.continuous || {};
+    return {
+      automationCostMultiplier: Math.max(1, Number(config.automationCostMultiplier) || 1.1),
+      automationRewardMultiplier: clamp(Number(config.automationRewardMultiplier) || 0.8, 0.25, 1),
+      chestFillRewardPenaltyPerItem: clamp(Number(config.chestFillRewardPenaltyPerItem) || 0.015, 0, 0.1),
+      minAutomationRewardMultiplier: clamp(Number(config.minAutomationRewardMultiplier) || 0.65, 0.25, 1)
+    };
+  }
+
+  function getRewardsChest() {
+    if (!state.expeditions.rewardsChest || typeof state.expeditions.rewardsChest !== "object") {
+      state.expeditions.rewardsChest = {
+        capacity: Math.max(1, Math.floor(Number(expeditionBalance.rewardsChestCapacity) || 10)),
+        items: []
+      };
+    }
+    const chest = state.expeditions.rewardsChest;
+    chest.capacity = Math.max(1, Math.floor(Number(chest.capacity) || Number(expeditionBalance.rewardsChestCapacity) || 10));
+    if (!Array.isArray(chest.items)) {
+      chest.items = [];
+    }
+    if (chest.items.length > chest.capacity) {
+      chest.items = chest.items.slice(0, chest.capacity);
+    }
+    return chest;
+  }
+
+  function isChestFull() {
+    const chest = getRewardsChest();
+    return chest.items.length >= chest.capacity;
+  }
+
+  function getContinuousState() {
+    if (!state.expeditions.meta.continuous || typeof state.expeditions.meta.continuous !== "object") {
+      state.expeditions.meta.continuous = {
+        active: false,
+        bandId: null,
+        stopReason: ""
+      };
+    }
+    const continuous = state.expeditions.meta.continuous;
+    continuous.active = Boolean(continuous.active);
+    continuous.bandId = typeof continuous.bandId === "string" ? continuous.bandId : null;
+    continuous.stopReason = typeof continuous.stopReason === "string" ? continuous.stopReason : "";
+    return continuous;
+  }
+
+  function setContinuousActive(bandId) {
+    const continuous = getContinuousState();
+    continuous.active = true;
+    continuous.bandId = bandId;
+    continuous.stopReason = "";
+  }
+
+  function stopContinuous(reasonKey, detailReason = "", bandId = null) {
+    const continuous = getContinuousState();
+    const reasonText = detailReason || CONTINUOUS_STOP_MESSAGES[reasonKey] || CONTINUOUS_STOP_MESSAGES.blocked;
+    const previousBandId = continuous.bandId;
+    continuous.active = false;
+    continuous.stopReason = reasonText;
+    continuous.bandId = typeof bandId === "string" ? bandId : previousBandId;
+    eventBus.emit("expedition:continuousStopped", {
+      reasonKey,
+      reason: reasonText,
+      bandId: continuous.bandId || null
+    });
+    return { reasonKey, reason: reasonText, bandId: continuous.bandId || null };
+  }
+
+  function mapStartFailureToStopKey(reason) {
+    if (typeof reason !== "string") {
+      return "blocked";
+    }
+    if (reason.toLowerCase().includes("chest")) {
+      return "chestFull";
+    }
+    if (reason.startsWith("Need ")) {
+      return "insufficientResources";
+    }
+    return "blocked";
+  }
+
+  function getAutomationRewardMultiplier() {
+    const config = getContinuousConfig();
+    const chest = getRewardsChest();
+    const chestPenalty = chest.items.length * config.chestFillRewardPenaltyPerItem;
+    return clamp(
+      config.automationRewardMultiplier - chestPenalty,
+      config.minAutomationRewardMultiplier,
+      1
+    );
+  }
 
   function getBandById(bandId) {
     return bandDefs.find((band) => band.id === bandId) || null;
@@ -428,9 +528,10 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     return logEntry;
   }
 
-  function start(bandId) {
-    if (state.expeditions.pendingRewards) {
-      return { ok: false, reason: "Claim pending rewards first." };
+  function start(bandId, options = {}) {
+    const automated = Boolean(options.automated);
+    if (isChestFull()) {
+      return { ok: false, reason: "Rewards chest is full. Claim rewards first." };
     }
     if (state.expeditions.activeRun) {
       return { ok: false, reason: "An expedition is already in progress." };
@@ -451,12 +552,15 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       return unlock;
     }
 
-    const matterCost = Math.max(0, band.cost?.matter || 0);
-    const fireCost = Math.max(0, band.cost?.fire || 0);
-    const baseIntelCost = Math.max(0, band.cost?.intel || 0);
+    const continuousConfig = getContinuousConfig();
+    const launchCostMultiplier = automated ? continuousConfig.automationCostMultiplier : 1;
+    const matterCost = Math.max(0, Math.floor((band.cost?.matter || 0) * launchCostMultiplier));
+    const fireCost = Math.max(0, Math.floor((band.cost?.fire || 0) * launchCostMultiplier));
+    const baseIntelCost = Math.max(0, Math.floor((band.cost?.intel || 0) * launchCostMultiplier));
     const rank = getBandRank(bandId);
     band.rank = rank;
-    const intelPressureCost = getIntelLaunchCostForBand(band, Date.now(), rank);
+    const rawIntelPressureCost = getIntelLaunchCostForBand(band, Date.now(), rank);
+    const intelPressureCost = Math.max(0, Math.floor(rawIntelPressureCost * launchCostMultiplier));
     const totalIntelCost = baseIntelCost + intelPressureCost;
 
     if (!resourceManager.spend("matter", matterCost)) {
@@ -473,6 +577,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     }
     state.expeditions.meta.intel = Math.max(0, Number(state.expeditions.meta.intel || 0) - totalIntelCost);
     applyIntelPressureLaunch({ ...band, rank }, Date.now());
+    setContinuousActive(bandId);
 
     const seed = (Date.now() + Math.floor(Math.random() * 1000000)) >>> 0;
     const stageCount = Math.max(1, Math.floor(Number(band.stageCount) || 2));
@@ -504,7 +609,10 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       },
       seed,
       startedAt: Date.now(),
-      costs: { matter: matterCost, fire: fireCost, intel: totalIntelCost }
+      costs: { matter: matterCost, fire: fireCost, intel: totalIntelCost },
+      launchCostMultiplier,
+      automatedLaunch: automated,
+      automationRewardMultiplier: automated ? getAutomationRewardMultiplier() : 1
     };
 
     state.expeditions.activeRun.stageVariances = buildStageVariances(state.expeditions.activeRun, band, stageCount);
@@ -520,9 +628,11 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       shipId: ship.shipId,
       intelCost: totalIntelCost,
       intelBaseCost: baseIntelCost,
-      intelPressureCost
+      intelPressureCost,
+      automated,
+      launchCostMultiplier
     });
-    return { ok: true };
+    return { ok: true, automated, continuous: true };
   }
 
   function resolveActiveRun() {
@@ -576,7 +686,15 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
           intel: Math.max(1, 1 + rewardFlat.intel)
         };
 
-    state.expeditions.pendingRewards = {
+    const rewardMultiplier = clamp(Number(run.automationRewardMultiplier) || 1, 0.25, 1);
+    const scaledRewards = {
+      matter: Math.max(0, Math.floor((rewards.matter || 0) * rewardMultiplier)),
+      fire: Math.max(0, Math.floor((rewards.fire || 0) * rewardMultiplier)),
+      shards: Math.max(0, Math.floor((rewards.shards || 0) * rewardMultiplier)),
+      intel: Math.max(0, Math.floor((rewards.intel || 0) * rewardMultiplier))
+    };
+
+    const chestEntry = {
       success,
       bandId: band.id,
       bandName: band.name,
@@ -585,9 +703,17 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       routeHistory: run.routeHistory,
       encounters: run.encounterLog,
       drops: run.pendingDrops,
-      rewards,
+      rewards: scaledRewards,
+      automatedLaunch: Boolean(run.automatedLaunch),
+      automationRewardMultiplier: rewardMultiplier,
       completedAt: Date.now()
     };
+
+    const chest = getRewardsChest();
+    if (chest.items.length < chest.capacity) {
+      chest.items.push(chestEntry);
+    }
+    state.expeditions.pendingRewards = null;
     state.expeditions.activeRun = null;
 
     state.lifetime.expeditionRuns += 1;
@@ -602,13 +728,36 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       state.expeditions.meta.failedRuns += 1;
     }
 
+    const chestCount = chest.items.length;
+    const chestCapacity = chest.capacity;
+    const chestFull = chestCount >= chestCapacity;
+
     eventBus.emit("expedition:complete", {
       bandId: band.id,
       success,
-      rewards
+      rewards: scaledRewards,
+      drops: chestEntry.drops,
+      chestCount,
+      chestCapacity,
+      chestFull,
+      bandName: band.name
     });
 
-    return state.expeditions.pendingRewards;
+    if (chestFull) {
+      stopContinuous("chestFull", CONTINUOUS_STOP_MESSAGES.chestFull, band.id);
+      return chestEntry;
+    }
+
+    const continuous = getContinuousState();
+    if (continuous.active && continuous.bandId === band.id) {
+      const relaunch = start(band.id, { automated: true });
+      if (!relaunch.ok) {
+        const stopKey = mapStartFailureToStopKey(relaunch.reason);
+        stopContinuous(stopKey, relaunch.reason, band.id);
+      }
+    }
+
+    return chestEntry;
   }
 
   function chooseRoute(choiceId) {
@@ -715,15 +864,10 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     return { resolved: false, needsChoice: true };
   }
 
-  function claim() {
-    const pending = state.expeditions.pendingRewards;
-    if (!pending) {
-      return { ok: false, reason: "No rewards to claim." };
-    }
-
-    const rewards = pending.rewards || {};
+  function claimChestEntry(entry) {
+    const rewards = entry?.rewards || {};
     const policy = expeditionBalance.duplicateBlueprintPolicy || {};
-    const drops = Array.isArray(pending.drops) ? pending.drops : [];
+    const drops = Array.isArray(entry?.drops) ? entry.drops : [];
     let duplicateIntel = 0;
     let duplicateShards = 0;
 
@@ -746,30 +890,155 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
 
     resourceManager.add("matter", rewards.matter || 0);
     resourceManager.add("fire", rewards.fire || 0);
-    resourceManager.add("shards", 0);
+    resourceManager.add("shards", rewards.shards || 0);
     resourceManager.add("shards", duplicateShards);
     state.expeditions.meta.intel += Math.max(0, rewards.intel || 0);
     state.expeditions.meta.intel += duplicateIntel;
 
-    state.expeditions.pendingRewards = null;
-    eventBus.emit("expedition:claim", {
-      rewards,
-      success: pending.success,
-      bandId: pending.bandId,
-      drops,
-      duplicateIntel,
-      duplicateShards
-    });
-
     return {
-      ok: true,
       rewards,
-      success: pending.success,
-      bandId: pending.bandId,
+      success: Boolean(entry?.success),
+      bandId: entry?.bandId || "",
+      bandName: entry?.bandName || "",
       drops,
       duplicateIntel,
       duplicateShards
     };
+  }
+
+  function claimChestOne() {
+    const chest = getRewardsChest();
+    if (chest.items.length === 0) {
+      return { ok: false, reason: "Rewards chest is empty." };
+    }
+
+    const entry = chest.items.shift();
+    const result = claimChestEntry(entry);
+    eventBus.emit("expedition:claim", {
+      ...result,
+      chestCount: chest.items.length,
+      chestCapacity: chest.capacity,
+      runsClaimed: 1
+    });
+
+    return {
+      ok: true,
+      ...result,
+      chestCount: chest.items.length,
+      chestCapacity: chest.capacity,
+      runsClaimed: 1
+    };
+  }
+
+  function getClaimAllPreview() {
+    const chest = getRewardsChest();
+    if (chest.items.length === 0) {
+      return { ok: false, reason: "Rewards chest is empty." };
+    }
+
+    const policy = expeditionBalance.duplicateBlueprintPolicy || {};
+    const previewBlueprintInventory = { ...(state.expeditions.blueprintInventory || {}) };
+    const rewards = cloneRewards();
+    let duplicateIntel = 0;
+    let duplicateShards = 0;
+    const drops = [];
+
+    chest.items.forEach((entry) => {
+      const entryRewards = entry?.rewards || {};
+      rewards.matter += Math.max(0, Number(entryRewards.matter) || 0);
+      rewards.fire += Math.max(0, Number(entryRewards.fire) || 0);
+      rewards.shards += Math.max(0, Number(entryRewards.shards) || 0);
+      rewards.intel += Math.max(0, Number(entryRewards.intel) || 0);
+
+      const entryDrops = Array.isArray(entry?.drops) ? entry.drops : [];
+      entryDrops.forEach((drop) => {
+        if (!drop?.id) {
+          return;
+        }
+        drops.push(drop);
+        if (drop.blueprintForShip) {
+          const existing = previewBlueprintInventory[drop.id] || 0;
+          if (existing > 0) {
+            duplicateIntel += Math.max(0, Number(policy.intelPerDuplicate) || 0);
+            duplicateShards += Math.max(0, Number(policy.shardsPerDuplicate) || 0);
+          } else {
+            previewBlueprintInventory[drop.id] = 1;
+          }
+        }
+      });
+    });
+
+    return {
+      ok: true,
+      runCount: chest.items.length,
+      rewards,
+      duplicateIntel,
+      duplicateShards,
+      totalRewards: {
+        matter: rewards.matter,
+        fire: rewards.fire,
+        shards: rewards.shards + duplicateShards,
+        intel: rewards.intel + duplicateIntel
+      },
+      drops
+    };
+  }
+
+  function claimChestAll() {
+    const chest = getRewardsChest();
+    if (chest.items.length === 0) {
+      return { ok: false, reason: "Rewards chest is empty." };
+    }
+
+    const claimed = [];
+    while (chest.items.length > 0) {
+      claimed.push(claimChestEntry(chest.items.shift()));
+    }
+
+    const mergedRewards = cloneRewards();
+    let duplicateIntel = 0;
+    let duplicateShards = 0;
+    const allDrops = [];
+    claimed.forEach((entry) => {
+      mergedRewards.matter += Math.max(0, Number(entry.rewards?.matter) || 0);
+      mergedRewards.fire += Math.max(0, Number(entry.rewards?.fire) || 0);
+      mergedRewards.shards += Math.max(0, Number(entry.rewards?.shards) || 0);
+      mergedRewards.intel += Math.max(0, Number(entry.rewards?.intel) || 0);
+      duplicateIntel += Math.max(0, Number(entry.duplicateIntel) || 0);
+      duplicateShards += Math.max(0, Number(entry.duplicateShards) || 0);
+      if (Array.isArray(entry.drops)) {
+        allDrops.push(...entry.drops);
+      }
+    });
+
+    eventBus.emit("expedition:claim", {
+      rewards: mergedRewards,
+      success: claimed.every((entry) => entry.success),
+      bandId: claimed.length === 1 ? claimed[0].bandId : "multiple",
+      drops: allDrops,
+      duplicateIntel,
+      duplicateShards,
+      chestCount: chest.items.length,
+      chestCapacity: chest.capacity,
+      runsClaimed: claimed.length
+    });
+
+    return {
+      ok: true,
+      rewards: mergedRewards,
+      success: claimed.every((entry) => entry.success),
+      bandId: claimed.length === 1 ? claimed[0].bandId : "multiple",
+      drops: allDrops,
+      duplicateIntel,
+      duplicateShards,
+      chestCount: chest.items.length,
+      chestCapacity: chest.capacity,
+      runsClaimed: claimed.length
+    };
+  }
+
+  function claim() {
+    return claimChestOne();
   }
 
   function abandon() {
@@ -780,6 +1049,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     state.expeditions.activeRun = null;
     state.lifetime.expeditionLosses += 1;
     state.expeditions.meta.failedRuns += 1;
+    stopContinuous("cancelled", CONTINUOUS_STOP_MESSAGES.cancelled, bandId);
     eventBus.emit("expedition:event", { type: "abandoned", bandId });
     return { ok: true };
   }
@@ -787,6 +1057,12 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   function handleAscendReset() {
     state.expeditions.activeRun = null;
     state.expeditions.pendingRewards = null;
+    const chest = getRewardsChest();
+    chest.items = [];
+    const continuous = getContinuousState();
+    continuous.active = false;
+    continuous.bandId = null;
+    continuous.stopReason = "";
     state.expeditions.meta.intelPressure = {};
   }
 
@@ -803,13 +1079,18 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   }
 
   function getStatus() {
+    const chest = getRewardsChest();
+    const continuous = getContinuousState();
+    const pendingFallback = chest.items.length > 0 ? chest.items[0] : null;
     return {
       unlockNodeId,
       unlocked: !unlockNodeId || Boolean(state.ascensionTree[unlockNodeId]),
       selectedShip: state.expeditions.selectedShip,
       selectedShipStats: getSelectedShipContext()?.stats || null,
       activeRun: state.expeditions.activeRun,
-      pendingRewards: state.expeditions.pendingRewards,
+      pendingRewards: state.expeditions.pendingRewards || pendingFallback,
+      rewardsChest: chest,
+      continuous,
       meta: state.expeditions.meta,
       autoRouteMode: normalizeAutoMode(state.expeditions.meta.autoRouteMode),
       bands: getBands()
@@ -825,7 +1106,11 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     setAutoRouteMode,
     advance,
     claim,
+    claimChestOne,
+    claimChestAll,
+    getClaimAllPreview,
     abandon,
+    stopContinuous,
     handleAscendReset
   };
 }
