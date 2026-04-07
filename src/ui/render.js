@@ -220,7 +220,7 @@ function getClaimedCollectionEffectSummary(milestones) {
     .filter(Boolean);
 }
 
-export function createRenderer({ appEl, state, balance, generatorDefs, formulas, systems, saveSlots, debugOptions = {} }) {
+export function createRenderer({ appEl, state, balance, currencyDisplay = {}, generatorDefs, formulas, systems, saveSlots, debugOptions = {} }) {
   const viewStateStorageKey = buildViewStateStorageKey(saveSlots?.activeSlotId);
   const persistedViewState = loadViewState(viewStateStorageKey);
 
@@ -255,6 +255,196 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
   };
 
   const refs = {};
+  const currencyMeta = currencyDisplay && typeof currencyDisplay === "object" ? currencyDisplay : {};
+  const rareDropNameById = Object.values(balance?.expeditions?.rareBlueprintDrops || {})
+    .flat()
+    .reduce((map, drop) => {
+      const dropId = typeof drop?.id === "string" ? drop.id.trim() : "";
+      const dropName = typeof drop?.name === "string" ? drop.name.trim() : "";
+      if (!dropId || !dropName || map[dropId]) {
+        return map;
+      }
+      map[dropId] = dropName;
+      return map;
+    }, {});
+
+  function toFallbackToken(value, maxChars = 3) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "?";
+    }
+    const words = text.split(/[^A-Za-z0-9]+/).filter(Boolean);
+    if (words.length >= 2) {
+      return words
+        .slice(0, maxChars)
+        .map((word) => word.charAt(0).toUpperCase())
+        .join("");
+    }
+    const compact = text.replace(/[^A-Za-z0-9]/g, "").slice(0, maxChars);
+    return compact ? compact.toUpperCase() : "?";
+  }
+
+  function toIconSlug(value) {
+    const slug = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return slug || "unknown";
+  }
+
+  function getDropDisplayName(dropId, fallback = "") {
+    const cleanDropId = typeof dropId === "string" ? dropId.trim() : "";
+    if (cleanDropId && rareDropNameById[cleanDropId]) {
+      return rareDropNameById[cleanDropId];
+    }
+    if (fallback) {
+      return fallback;
+    }
+    return cleanDropId ? toTitleToken(cleanDropId) : "Unknown Drop";
+  }
+
+  function normalizeCurrencyId(resourceId) {
+    const normalized = String(resourceId || "matter").trim().toLowerCase();
+    return normalized || "matter";
+  }
+
+  function getCurrencyConfig(resourceId) {
+    const id = normalizeCurrencyId(resourceId);
+    const configured = currencyMeta[id];
+    if (configured && typeof configured === "object") {
+      return {
+        id,
+        label: configured.label || toTitleToken(id),
+        cardFallback: configured.cardFallback || configured.inlineFallback || "?",
+        inlineFallback: configured.inlineFallback || configured.cardFallback || "?",
+        iconPath: configured.iconPath || "",
+        alt: configured.alt || `${configured.label || toTitleToken(id)} icon`
+      };
+    }
+
+    const label = toTitleToken(id);
+    const cardFallback = (label || "?").slice(0, 3).toUpperCase() || "?";
+    return {
+      id,
+      label,
+      cardFallback,
+      inlineFallback: cardFallback.charAt(0) || "?",
+      iconPath: "",
+      alt: `${label || "Resource"} icon`
+    };
+  }
+
+  function renderCurrencyIcon(resourceId, variant = "inline") {
+    const currency = getCurrencyConfig(resourceId);
+    const fallback = variant === "card"
+      ? (currency.cardFallback || currency.inlineFallback || "?")
+      : (currency.inlineFallback || currency.cardFallback || "?");
+    const iconClass = variant === "card"
+      ? "currency-icon currency-icon--card card-icon"
+      : "currency-icon currency-icon--inline";
+    const imageMarkup = currency.iconPath
+      ? `<img class="currency-icon__image" src="${currency.iconPath}" data-icon-src="${currency.iconPath}" alt="" loading="eager" decoding="async" draggable="false">`
+      : "";
+    return `<span class="${iconClass}" data-currency-icon data-currency-id="${currency.id}" title="${currency.label}" role="img" aria-label="${currency.alt}">${imageMarkup}<span class="currency-icon__fallback" aria-hidden="true">${fallback}</span></span>`;
+  }
+
+  function renderExpeditionItemIcon(itemId, options = {}) {
+    const variant = typeof options.variant === "string" && options.variant.trim()
+      ? options.variant.trim()
+      : "inline";
+    const label = typeof options.label === "string" && options.label.trim()
+      ? options.label.trim()
+      : getDropDisplayName(itemId);
+    const iconKey = toIconSlug(options.iconKey || itemId || label);
+    const iconPath = typeof options.iconPath === "string" && options.iconPath.trim()
+      ? options.iconPath.trim()
+      : `assets/icons/expedition-items/${iconKey}.png`;
+    const fallback = typeof options.fallback === "string" && options.fallback.trim()
+      ? options.fallback.trim()
+      : toFallbackToken(label);
+    const iconClass = `drop-icon drop-icon--${variant}`;
+    return `<span class="${iconClass}" data-drop-icon data-drop-key="${iconKey}" title="${label}" role="img" aria-label="${label} icon"><img class="drop-icon__image" src="${iconPath}" alt="" loading="lazy" decoding="async" draggable="false"><span class="drop-icon__fallback" aria-hidden="true">${fallback}</span></span>`;
+  }
+
+  function formatCurrencyAmount(resourceId, amount, options = {}) {
+    const { showPositiveSign = false } = options;
+    const numeric = Number(amount);
+    const safeValue = Number.isFinite(numeric) ? numeric : 0;
+    const sign = showPositiveSign && safeValue >= 0 ? "+" : "";
+    return `${sign}${formatNumber(safeValue)}${renderCurrencyIcon(resourceId)}`;
+  }
+
+  function hydrateCurrencyIcons(root = appEl) {
+    if (!root) {
+      return;
+    }
+    root.querySelectorAll("[data-currency-icon]").forEach((iconEl) => {
+      const imageEl = iconEl.querySelector(".currency-icon__image");
+      if (!imageEl) {
+        iconEl.classList.remove("is-loaded");
+        return;
+      }
+
+      const applyLoadState = () => {
+        if (imageEl.naturalWidth > 0) {
+          iconEl.classList.add("is-loaded");
+        } else {
+          iconEl.classList.remove("is-loaded");
+        }
+      };
+
+      if (imageEl.dataset.iconBound !== "true") {
+        imageEl.dataset.iconBound = "true";
+        imageEl.addEventListener("load", applyLoadState);
+        imageEl.addEventListener("error", () => {
+          iconEl.classList.remove("is-loaded");
+        });
+      }
+
+      if (imageEl.complete) {
+        applyLoadState();
+      }
+    });
+  }
+
+  function hydrateDropIcons(root = appEl) {
+    if (!root) {
+      return;
+    }
+    root.querySelectorAll("[data-drop-icon]").forEach((iconEl) => {
+      const imageEl = iconEl.querySelector(".drop-icon__image");
+      if (!imageEl) {
+        iconEl.classList.remove("is-loaded");
+        return;
+      }
+
+      const applyLoadState = () => {
+        if (imageEl.naturalWidth > 0) {
+          iconEl.classList.add("is-loaded");
+        } else {
+          iconEl.classList.remove("is-loaded");
+        }
+      };
+
+      if (imageEl.dataset.iconBound !== "true") {
+        imageEl.dataset.iconBound = "true";
+        imageEl.addEventListener("load", applyLoadState);
+        imageEl.addEventListener("error", () => {
+          iconEl.classList.remove("is-loaded");
+        });
+      }
+
+      if (imageEl.complete) {
+        applyLoadState();
+      }
+    });
+  }
+
+  function hydrateUiIcons(root = appEl) {
+    hydrateCurrencyIcons(root);
+    hydrateDropIcons(root);
+  }
 
   function persistCurrentViewState() {
     persistViewState(viewStateStorageKey, {
@@ -287,7 +477,6 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     ui.rareDropPopups = ui.rareDropPopups.filter((popup) => popup.id !== popupId);
     renderRareDropPopups();
   }
-
   function renderRareDropPopups() {
     if (!refs.rarePopupStack) {
       return;
@@ -304,7 +493,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.rarePopupStack.innerHTML = ui.rareDropPopups
       .map((popup) => {
         const items = popup.items
-          .map((item) => `<div class="rare-popup-item"><span class="rare-popup-rarity">${item.rarity}</span><span>${item.name}</span></div>`)
+          .map((item) => `<div class="rare-popup-item"><span class="rare-popup-rarity">${item.rarity}</span>${renderExpeditionItemIcon(item.id || item.name, { label: item.name, variant: "popup" })}<span>${item.name}</span></div>`)
           .join("");
         const overflow = popup.overflowCount > 0
           ? `<div class="rare-popup-more">+${popup.overflowCount} more rare drop${popup.overflowCount === 1 ? "" : "s"}</div>`
@@ -319,6 +508,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         `;
       })
       .join("");
+    hydrateUiIcons(refs.rarePopupStack);
   }
 
   function showRareDropPopup(drops) {
@@ -330,7 +520,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     }
 
     const popupItems = rareDrops.slice(0, 3).map((drop) => ({
-      name: String(drop.name || drop.id),
+      id: String(drop.id || ""),
+      name: getDropDisplayName(drop.id, String(drop.name || drop.id)),
       rarity: toTitleToken(drop.rarity || "rare")
     }));
 
@@ -357,12 +548,12 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const fire = Math.max(0, Number(cost.fire) || 0);
     const shards = Math.max(0, Number(cost.shards) || 0);
     const intel = Math.max(0, Number(cost.intel) || 0);
-    const parts = [`${formatNumber(matter)} Matter`, `${formatNumber(fire)} Fire`];
+    const parts = [formatCurrencyAmount("matter", matter), formatCurrencyAmount("fire", fire)];
     if (intel > 0) {
-      parts.push(`${formatNumber(intel)} Intel`);
+      parts.push(formatCurrencyAmount("intel", intel));
     }
     if (shards > 0) {
-      parts.push(`${formatNumber(shards)} Shards`);
+      parts.push(formatCurrencyAmount("shards", shards));
     }
     return parts.join(" | ");
   }
@@ -431,7 +622,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const dropType = getRareDropTypeLabel(drop);
         return `
           <div class="expedition-loot-row">
-            <span class="expedition-loot-name">${dropName}</span>
+            <span class="expedition-loot-name">${renderExpeditionItemIcon(drop?.id || dropName, { label: dropName, variant: "loot" })}<span>${dropName}</span></span>
             <span class="expedition-loot-type">${dropType}</span>
             <span class="expedition-loot-rate">${dropRate}</span>
           </div>
@@ -633,25 +824,25 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         <div class="resource-grid">
           <div class="resource-card resource-card--matter" data-resource="matter">
             <div class="card-title">
-              <span class="card-icon" aria-hidden="true">MAT</span>
+              ${renderCurrencyIcon("matter", "card")}
               <div class="label">Matter</div>
             </div>
             <div class="value" id="matter-value">0</div>
-            <div class="hint" id="transmute-yield">+1 Matter/tap</div>
+            <div class="hint" id="transmute-yield"><span id="transmute-matter-amount">+1</span>${renderCurrencyIcon("matter")}<span>/tap</span><span id="transmute-fire-bonus" class="hidden"> +<span id="transmute-fire-bonus-amount">0</span>${renderCurrencyIcon("fire")}</span></div>
             <div class="action">${actionButton("Transmute", "primary", "transmute")}</div>
           </div>
           <div class="resource-card resource-card--fire" data-resource="fire">
             <div class="card-title">
-              <span class="card-icon" aria-hidden="true">FIR</span>
+              ${renderCurrencyIcon("fire", "card")}
               <div class="label">Fire</div>
             </div>
             <div class="value" id="fire-value">0</div>
-            <div class="hint" id="convert-yield">100M -> 1F</div>
+            <div class="hint" id="convert-yield"><span id="convert-cost-amount">100</span>${renderCurrencyIcon("matter")}<span> -> </span><span id="convert-out-amount">1</span>${renderCurrencyIcon("fire")}</div>
             <div class="action">${actionButton("Convert", "secondary", "convert")}</div>
           </div>
           <div class="resource-card resource-card--intel ${expeditionUnlocked ? "" : "is-locked"}" data-resource="intel" id="intel-card">
             <div class="card-title">
-              <span class="card-icon" aria-hidden="true">EXP</span>
+              ${renderCurrencyIcon("intel", "card")}
               <div class="label">Intel</div>
             </div>
             <div class="value" id="intel-value">0</div>
@@ -660,11 +851,11 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           </div>
           <div class="resource-card resource-card--ascend" data-resource="shards">
             <div class="card-title">
-              <span class="card-icon" aria-hidden="true">SHD</span>
+              ${renderCurrencyIcon("shards", "card")}
               <div class="label">Shards</div>
             </div>
             <div class="value" id="shards-value">0</div>
-            <div class="hint" id="ascend-gain">0M + 0F -> +0S</div>
+            <div class="hint" id="ascend-gain"><span id="ascend-matter-cost">0</span>${renderCurrencyIcon("matter")}<span> + </span><span id="ascend-fire-cost">0</span>${renderCurrencyIcon("fire")}<span> -> </span><span id="ascend-gain-amount">+0</span>${renderCurrencyIcon("shards")}</div>
             <div class="action">${actionButton("Ascend", "ghost", "ascend")}</div>
           </div>
         </div>
@@ -704,6 +895,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.saveReset = appEl.querySelector("[data-action='save-reset']");
     refs.debugPanel = appEl.querySelector("#debug-panel");
     ui.panelEl = appEl.querySelector("#dynamic-panel");
+    hydrateUiIcons(appEl);
   }
 
   function renderPinnedPanel(rates) {
@@ -717,6 +909,14 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.transmuteYield = appEl.querySelector("#transmute-yield");
     refs.convertYield = appEl.querySelector("#convert-yield");
     refs.ascendGain = appEl.querySelector("#ascend-gain");
+    refs.transmuteMatterAmount = appEl.querySelector("#transmute-matter-amount");
+    refs.transmuteFireBonus = appEl.querySelector("#transmute-fire-bonus");
+    refs.transmuteFireBonusAmount = appEl.querySelector("#transmute-fire-bonus-amount");
+    refs.convertCostAmount = appEl.querySelector("#convert-cost-amount");
+    refs.convertOutAmount = appEl.querySelector("#convert-out-amount");
+    refs.ascendMatterCost = appEl.querySelector("#ascend-matter-cost");
+    refs.ascendFireCost = appEl.querySelector("#ascend-fire-cost");
+    refs.ascendGainAmount = appEl.querySelector("#ascend-gain-amount");
     refs.prodInline = appEl.querySelector("#prod-inline");
     refs.rate = appEl.querySelector("#rate-value");
     refs.notice = appEl.querySelector("#notice");
@@ -736,7 +936,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           <div class="row">
             <div>
               <div><strong>${def.name}</strong> Lv.${level}</div>
-              <div class="kv">+${formatNumber(effectiveRate)}/s ${def.resource} | Cost ${formatNumber(cost)} ${def.costResource}</div>
+              <div class="kv">+${formatNumber(effectiveRate)}/s ${renderCurrencyIcon(def.resource)} | Cost ${formatCurrencyAmount(def.costResource, cost)}</div>
             </div>
             ${actionButton("Buy", "ghost", `buy:${def.id}`)}
           </div>
@@ -819,7 +1019,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div>
               <div><strong>${def.name}</strong></div>
               <div class="kv">${description}</div>
-              <div class="kv">${status}${maxed ? "" : ` | Next: ${formatNumber(cost)} ${def.costResource}`}</div>
+              <div class="kv">${status}${maxed ? "" : ` | Next: ${formatCurrencyAmount(def.costResource, cost)}`}</div>
             </div>
             ${actionButton(maxed ? "Max" : "Buy Tier", "ghost", `upgrade:${def.id}`, disabled)}
           </div>
@@ -865,7 +1065,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div>
               <div><strong>${def.name}</strong></div>
               <div class="kv">${def.description}</div>
-              <div class="kv">${status}${maxed ? "" : ` | Next: ${formatNumber(nextCost)} ${def.costResource}`}</div>
+              <div class="kv">${status}${maxed ? "" : ` | Next: ${formatCurrencyAmount(def.costResource, nextCost)}`}</div>
             </div>
             ${actionButton(maxed ? "Max" : "Research", "ghost", `research:${def.id}`, disabled)}
           </div>
@@ -945,6 +1145,14 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             const nameToken = discovered
               ? (item.discoveredName || item.name || item.id)
               : `Unknown Relic #${index + 1}`;
+            const iconMarkup = discovered
+              ? renderExpeditionItemIcon(item.id || nameToken, { label: nameToken, variant: "collection" })
+              : renderExpeditionItemIcon("unknown", {
+                label: "Unknown Relic",
+                fallback: "?",
+                variant: "collection",
+                iconPath: "assets/icons/expedition-items/unknown.png"
+              });
             const classNames = ["collection-item"];
             if (discovered) {
               classNames.push("is-discovered");
@@ -954,7 +1162,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             return `
               <div class="${classNames.join(" ")}">
                 <div class="collection-item-main">
-                  <div class="collection-item-name">${nameToken}</div>
+                  <div class="collection-item-name">${iconMarkup}<span>${nameToken}</span></div>
                   <div class="chip-row">
                     <span class="chip chip--rarity">${rarityToken}</span>
                     ${item.bandId ? `<span class="chip">${item.bandId}</span>` : ""}
@@ -1027,7 +1235,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
         const description = unlocked ? node.description : "Unknown effect";
         const title = unlocked ? node.description : "Unknown effect";
-        const costLine = unlocked ? `<div class="hex-meta">${node.cost} shards</div>` : "";
+        const costLine = unlocked ? `<div class="hex-meta">${formatCurrencyAmount("shards", node.cost)}</div>` : "";
 
         return `
           <button class="${classList.join(" ")}" data-action="ascend:${node.id}" ${style} ${disabled ? "disabled" : ""} title="${title}">
@@ -1228,7 +1436,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       .join("");
     const blueprintRows = Object.entries(shipStatus.blueprintInventory || {})
       .filter(([, count]) => Number(count) > 0)
-      .map(([id, count]) => `<div class="kv">${id} x${count}</div>`)
+      .map(([id, count]) => {
+        const displayName = getDropDisplayName(id, id);
+        return `<div class="kv expedition-ledger-row">${renderExpeditionItemIcon(id, { label: displayName, variant: "ledger" })}<span>${displayName} x${count}</span></div>`;
+      })
       .join("");
 
     return `
@@ -1335,7 +1546,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         return `
           <div class="inventory-item inventory-item--part" draggable="true" data-part-id="${item.partRef}" data-slot="${item.def.slot}" data-ship-id="${selectedShipId}">
             <div>
-              <div><strong>${item.def.name} T${item.tier}</strong> x${item.count} <span class="kv">(${item.availableCount} free)</span></div>
+              <div class="inventory-item-title">${renderExpeditionItemIcon(item.basePartId, { label: item.def.name, variant: "inventory" })}<strong>${item.def.name} T${item.tier}</strong> x${item.count} <span class="kv">(${item.availableCount} free)</span></div>
               <div class="chip-row"><span class="chip chip--rarity">${rarity}</span><span class="chip chip--tier">T${item.tier}</span><span class="chip">${item.def.slot}</span>${shipBadge}${equippedBadge}</div>
               <div class="kv">${effectText || "No stat modifiers."}</div>
               ${combineHint ? `<div class="kv">${combineHint}</div>` : ""}
@@ -1405,7 +1616,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const voyageMaps = Array.isArray(expeditionStatus.voyageMaps) ? expeditionStatus.voyageMaps : [];
     const mapSummary = voyageMaps.length > 0
       ? `<div class="kv expedition-meta-inline"><strong>Map Inventory:</strong> ${voyageMaps
-        .map((map) => `${map.name} x${Math.max(0, Number(map.owned) || 0)}`)
+        .map((map) => `${renderExpeditionItemIcon(map.id || map.name, { label: map.name, variant: "map" })} ${map.name} x${Math.max(0, Number(map.owned) || 0)}`)
         .join(" | ")}</div>`
       : "";
     const metaSummary = `<div class="kv expedition-meta-inline"><strong>Successful Runs:</strong> ${formatInt(expeditionStatus.meta.completedRuns || 0)} | <strong>Failed Runs:</strong> ${formatInt(expeditionStatus.meta.failedRuns || 0)}</div>`;
@@ -1451,7 +1662,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           <div class="expedition-chest-stats">
             <span>Loop: ${loopState}</span>
             ${chestCount > 0
-              ? `<span>Booty: +${formatNumber(accumulatedRewards.matter || 0)}M, +${formatNumber(accumulatedRewards.fire || 0)}F, +${formatNumber(accumulatedRewards.intel || 0)}I${accumulatedDropCount > 0 ? `, ${accumulatedDropCount} drop${accumulatedDropCount === 1 ? "" : "s"}` : ""}</span>`
+              ? `<span>Booty: ${formatCurrencyAmount("matter", accumulatedRewards.matter || 0, { showPositiveSign: true })}, ${formatCurrencyAmount("fire", accumulatedRewards.fire || 0, { showPositiveSign: true })}, ${formatCurrencyAmount("intel", accumulatedRewards.intel || 0, { showPositiveSign: true })}${accumulatedDropCount > 0 ? `, ${accumulatedDropCount} drop${accumulatedDropCount === 1 ? "" : "s"}` : ""}</span>`
               : "<span>Chest empty</span>"}
           </div>
         </div>
@@ -1503,7 +1714,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
                         <span>${riskText}</span>
                         <span>${yieldText}</span>
                         <span>x${formatIntOrFixed(speed)} speed</span>
-                        <span>${intelFlat >= 0 ? "+" : ""}${intelFlat} intel</span>
+                        <span>${formatCurrencyAmount("intel", intelFlat, { showPositiveSign: true })}</span>
                       </div>
                       ${choice.unlocked ? "" : `<div class="kv">${choice.lockReason || "Locked"}</div>`}
                     </div>
@@ -1551,7 +1762,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const mapUnlocked = Boolean(mapRequirement.unlocked);
         const canUseMap = Boolean(mapRequirement.requiredMapId) && hasMap && !mapUnlocked;
         const canBuy = !purchased && band.unlock.ok && purchaseIntelCost > 0;
-        const buyLabel = `Buy ${formatNumber(purchaseIntelCost)}I`;
+        const buyLabel = `Buy ${formatCurrencyAmount("intel", purchaseIntelCost)}`;
         const encodedMapId = mapRequirement.requiredMapId
           ? encodeURIComponent(mapRequirement.requiredMapId)
           : "";
@@ -1560,7 +1771,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           : (disabledByChest
             ? "<div class=\"kv\">Chest full. Claim rewards first.</div>"
             : "");
-        const costLine = `${formatNumber(cost.matter || 0)}M | ${formatNumber(cost.fire || 0)}F`;
+        const costLine = `${formatCurrencyAmount("matter", cost.matter || 0)} | ${formatCurrencyAmount("fire", cost.fire || 0)}`;
         const mapLine = mapRequirement.requiredMapId
           ? `<div class="kv">Map: ${mapName || mapRequirement.requiredMapId} ${mapUnlocked ? "(Unlocked)" : `(Owned: ${Math.max(0, Number(mapRequirement.owned) || 0)})`}</div>`
           : "";
@@ -1653,6 +1864,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         nextScroll.scrollTop = ui.scrollPositions[ui.activeTab] || 0;
       }
     }
+    hydrateUiIcons(ui.pinnedEl);
+    hydrateUiIcons(ui.panelEl);
     refs.mainGrid.classList.toggle("full-width-mode", isFullWidthTab);
     refs.mainGrid.classList.toggle("expeditions-mode", isExpeditionsTab);
     if (isAscendTab) {
@@ -2284,13 +2497,21 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     const clickBase = (balance.baseClickMatter + state.perks.clickMatterBonus) * state.perks.clickMultiplier;
     const clickFire = state.perks.clickFireBonus;
-    const clickFireText = clickFire > 0 ? ` +${formatNumber(clickFire)}F` : "";
-    refs.transmuteYield.textContent = `+${formatNumber(clickBase)} Matter/tap${clickFireText}`;
+    refs.transmuteMatterAmount.textContent = `+${formatNumber(clickBase)}`;
+    if (clickFire > 0) {
+      refs.transmuteFireBonus.classList.remove("hidden");
+      refs.transmuteFireBonusAmount.textContent = formatNumber(clickFire);
+    } else {
+      refs.transmuteFireBonus.classList.add("hidden");
+    }
     const conversionBase = balance.elementConversionCost * state.perks.conversionCostMultiplier;
     const conversionCost = Math.max(1, Math.floor(conversionBase - state.perks.conversionCostFlatReduction));
     const conversionOut = (1 + state.perks.conversionFireBonus) * state.perks.conversionYieldMultiplier;
-    refs.convertYield.textContent = `${formatNumber(conversionCost)}M -> ${formatNumber(conversionOut)}F`;
-    refs.ascendGain.textContent = `${formatNumber(ascendCostValues.matterCost)}M + ${formatNumber(ascendCostValues.fireCost)}F -> +${formatNumber(ascendGain)}S`;
+    refs.convertCostAmount.textContent = formatNumber(conversionCost);
+    refs.convertOutAmount.textContent = formatNumber(conversionOut);
+    refs.ascendMatterCost.textContent = formatNumber(ascendCostValues.matterCost);
+    refs.ascendFireCost.textContent = formatNumber(ascendCostValues.fireCost);
+    refs.ascendGainAmount.textContent = `+${formatNumber(ascendGain)}`;
     refs.rate.textContent = `${formatNumber(rates.matter)}/s Matter | ${formatNumber(rates.fire)}/s Fire`;
 
     refs.convertButton.disabled = state.resources.matter < conversionCost;

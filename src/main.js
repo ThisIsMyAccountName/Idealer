@@ -1,4 +1,5 @@
 import { BALANCE } from "./config/gameBalance.js";
+import { CURRENCY_DISPLAY } from "./config/currencyDisplay.js";
 import { createEventBus } from "./engine/eventBus.js";
 import { createInitialState, sanitizeState } from "./engine/gameState.js";
 import * as formulas from "./engine/formulas.js";
@@ -150,6 +151,7 @@ const renderer = createRenderer({
   appEl,
   state,
   balance: BALANCE,
+  currencyDisplay: CURRENCY_DISPLAY,
   generatorDefs,
   formulas,
   systems,

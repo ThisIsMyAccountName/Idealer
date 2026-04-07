@@ -28,6 +28,46 @@ Implemented:
 - `src/ui`: rendering and interaction bindings
 - `src/config`: tuning constants and content definitions
 
+## Currency Icons
+
+Currency displays are now icon-first with automatic text fallback.
+
+Drop files in:
+- `assets/icons/currencies/`
+
+Use exact filenames:
+- `matter.png`
+- `fire.png`
+- `intel.png`
+- `shards.png`
+
+Recommended source size:
+- `64x64` transparent PNG minimum
+- `128x128` optional master export for future high-DPI usage
+
+Fallback behavior:
+- If an icon loads, UI shows the image.
+- If an icon is missing or fails to load, UI shows existing tokens (`MAT/FIR/EXP/SHD` for card badges and `M/F/I/S` inline).
+
+## Expedition Item Icons
+
+Expedition drops (loot tables, collection catalog, blueprint ledger, part inventory) are also icon-first.
+
+Drop files in:
+- `assets/icons/expedition-items/`
+
+Filename rule:
+- Item ID converted to lowercase kebab-case
+- Replace non-alphanumeric characters with `-`
+
+Examples:
+- `part:raft:sail:patched-cloth` -> `part-raft-sail-patched-cloth.png`
+- `ship:sloop:keel-plan` -> `ship-sloop-keel-plan.png`
+- `map:abyssal-atlas` -> `map-abyssal-atlas.png`
+
+Optional hidden-entry placeholder:
+- `unknown.png`
+
 ## Run
 
 No build tooling is required.

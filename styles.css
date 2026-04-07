@@ -157,6 +157,120 @@ h1 {
   color: var(--muted);
 }
 
+.currency-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  line-height: 1;
+  overflow: hidden;
+}
+
+.currency-icon__image {
+  display: none;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.currency-icon.is-loaded .currency-icon__image {
+  display: block;
+}
+
+.currency-icon.is-loaded .currency-icon__fallback {
+  display: none;
+}
+
+.currency-icon--card .currency-icon__image {
+  width: 18px;
+  height: 18px;
+}
+
+.currency-icon--inline {
+  width: 2.2em;
+  height: 2.2em;
+  min-width: 2.2em;
+  min-height: 2.2em;
+  margin-left: 0.12em;
+  border-radius: 0.24em;
+  border: 1px solid rgba(125, 116, 100, 0.35);
+  background: rgba(255, 255, 255, 0.6);
+  color: currentColor;
+  font-size: 0.62em;
+  font-weight: 700;
+  letter-spacing: 0;
+  transform: translateY(0.08em);
+}
+
+.currency-icon--inline.is-loaded {
+  border-color: transparent;
+  background: transparent;
+}
+
+.currency-icon--inline.is-loaded .currency-icon__image {
+  width: 100%;
+  height: 100%;
+}
+
+.drop-icon {
+  --drop-icon-size: 1.05em;
+  width: var(--drop-icon-size);
+  height: var(--drop-icon-size);
+  min-width: var(--drop-icon-size);
+  min-height: var(--drop-icon-size);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  border-radius: 0.25em;
+  border: 1px solid rgba(125, 116, 100, 0.35);
+  background: rgba(255, 255, 255, 0.62);
+  color: currentColor;
+  line-height: 1;
+  overflow: hidden;
+  transform: translateY(0.05em);
+}
+
+.drop-icon__image {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.drop-icon__fallback {
+  font-size: 0.52em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.drop-icon.is-loaded {
+  border-color: transparent;
+  background: transparent;
+}
+
+.drop-icon.is-loaded .drop-icon__image {
+  display: block;
+}
+
+.drop-icon.is-loaded .drop-icon__fallback {
+  display: none;
+}
+
+.drop-icon--collection {
+  --drop-icon-size: 1.2em;
+}
+
+.drop-icon--inventory {
+  --drop-icon-size: 1.25em;
+}
+
+.drop-icon--popup {
+  --drop-icon-size: 1.15em;
+}
+
 .resource-card--matter {
   --card-pattern:
     radial-gradient(circle at 18% 22%, rgba(217, 83, 30, 0.2), transparent 48%),
@@ -653,8 +767,15 @@ h1 {
 }
 
 .collection-item-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.collection-item-name span {
+  min-width: 0;
 }
 
 .collection-item-state {
@@ -925,6 +1046,9 @@ h1 {
 }
 
 .expedition-loot-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
 }
 
@@ -1223,6 +1347,12 @@ h1 {
   white-space: nowrap;
 }
 
+.expedition-ledger-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .chip-row {
   display: flex;
   gap: 6px;
@@ -1279,6 +1409,13 @@ h1 {
   background: #fff;
   min-height: 88px;
   gap: 6px;
+}
+
+.inventory-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .inventory-item-actions {
