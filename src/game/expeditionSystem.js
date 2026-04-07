@@ -28,12 +28,421 @@ const CONTINUOUS_STOP_MESSAGES = {
   cancelled: "Expedition cancelled.",
   blocked: "Automatic relaunch was blocked."
 };
+const COLLECTION_DEFAULT_SOURCE_ID = "expeditionRareDrops";
+const COLLECTION_ITEM_KEY_SEPARATOR = "::";
+const COLLECTION_RARITY_ORDER = {
+  common: 0,
+  "semi-rare": 1,
+  rare: 2,
+  epic: 3,
+  legendary: 4
+};
 
-export function createExpeditionSystem({ state, resourceManager, eventBus, balance, shipSystem }) {
+function createCollectionItemKey(sourceId, itemId) {
+  const cleanItemId = typeof itemId === "string" ? itemId.trim() : "";
+  if (!cleanItemId) {
+    return "";
+  }
+  const cleanSourceId = typeof sourceId === "string" ? sourceId.trim() : "";
+  const resolvedSourceId = cleanSourceId || COLLECTION_DEFAULT_SOURCE_ID;
+  return `${resolvedSourceId}${COLLECTION_ITEM_KEY_SEPARATOR}${cleanItemId}`;
+}
+
+function toTitleToken(value) {
+  return String(value || "")
+    .trim()
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+export function createExpeditionSystem({ state, resourceManager, eventBus, balance, shipSystem, recompute }) {
   const expeditionBalance = balance.expeditions || {};
   const bandDefs = expeditionBalance.bands || [];
   const unlockNodeId = expeditionBalance.unlockNodeId;
   const shipDefs = expeditionBalance.ships || {};
+  const voyageMapDefs = expeditionBalance.voyageMaps && typeof expeditionBalance.voyageMaps === "object"
+    ? expeditionBalance.voyageMaps
+    : {};
+
+  function getCollectionState() {
+    if (!state.expeditions.collection || typeof state.expeditions.collection !== "object") {
+      state.expeditions.collection = {
+        discoveredItems: {},
+        claimedMilestones: {},
+        legacyBackfillDone: false
+      };
+    }
+    if (!state.expeditions.collection.discoveredItems || typeof state.expeditions.collection.discoveredItems !== "object") {
+      state.expeditions.collection.discoveredItems = {};
+    }
+    if (!state.expeditions.collection.claimedMilestones || typeof state.expeditions.collection.claimedMilestones !== "object") {
+      state.expeditions.collection.claimedMilestones = {};
+    }
+    state.expeditions.collection.legacyBackfillDone = Boolean(state.expeditions.collection.legacyBackfillDone);
+    return state.expeditions.collection;
+  }
+
+  function getCollectionSourceDefs() {
+    const configured = expeditionBalance.collectionSources && typeof expeditionBalance.collectionSources === "object"
+      ? expeditionBalance.collectionSources
+      : {};
+    if (configured[COLLECTION_DEFAULT_SOURCE_ID]) {
+      return configured;
+    }
+    return {
+      ...configured,
+      [COLLECTION_DEFAULT_SOURCE_ID]: {
+        name: "Expedition Rare Drops",
+        description: "Track every rare blueprint and ship part recovered from voyages.",
+        autoFromRareDrops: true
+      }
+    };
+  }
+
+  function getCollectionMilestones() {
+    const configured = Array.isArray(expeditionBalance.collectionMilestones)
+      ? expeditionBalance.collectionMilestones
+      : [];
+    const usedIds = new Set();
+    return configured
+      .map((rawMilestone, index) => {
+        const baseId = typeof rawMilestone?.id === "string" && rawMilestone.id.trim()
+          ? rawMilestone.id.trim()
+          : `collectionMilestone${index + 1}`;
+        let milestoneId = baseId;
+        while (usedIds.has(milestoneId)) {
+          milestoneId = `${baseId}_${index + 1}`;
+        }
+        usedIds.add(milestoneId);
+        return {
+          id: milestoneId,
+          requiredUnique: Math.max(1, clampInt(rawMilestone?.requiredUnique ?? rawMilestone?.threshold ?? (index + 1))),
+          name: typeof rawMilestone?.name === "string" && rawMilestone.name.trim()
+            ? rawMilestone.name.trim()
+            : `Collection Milestone ${index + 1}`,
+          description: typeof rawMilestone?.description === "string" ? rawMilestone.description : "",
+          effect: rawMilestone?.effect && typeof rawMilestone.effect === "object" ? rawMilestone.effect : {}
+        };
+      })
+      .sort((left, right) => left.requiredUnique - right.requiredUnique);
+  }
+
+  function getCollectionCatalog() {
+    const sourceDefs = getCollectionSourceDefs();
+    const sourceMap = new Map();
+
+    function ensureSource(sourceId, sourceDef = {}) {
+      if (!sourceMap.has(sourceId)) {
+        sourceMap.set(sourceId, {
+          id: sourceId,
+          name: typeof sourceDef.name === "string" && sourceDef.name.trim()
+            ? sourceDef.name.trim()
+            : toTitleToken(sourceId),
+          description: typeof sourceDef.description === "string" ? sourceDef.description : "",
+          items: {}
+        });
+      }
+      return sourceMap.get(sourceId);
+    }
+
+    function upsertSourceItem(sourceId, sourceDef, itemDef) {
+      const itemId = typeof itemDef?.id === "string" ? itemDef.id.trim() : "";
+      if (!itemId) {
+        return;
+      }
+      const source = ensureSource(sourceId, sourceDef);
+      const existing = source.items[itemId];
+      const resolvedName = typeof itemDef?.name === "string" && itemDef.name.trim() ? itemDef.name.trim() : itemId;
+      const resolvedRarity = typeof itemDef?.rarity === "string" && itemDef.rarity.trim()
+        ? itemDef.rarity.trim().toLowerCase()
+        : "rare";
+      if (existing) {
+        if (!existing.name && resolvedName) {
+          existing.name = resolvedName;
+        }
+        if (!existing.rarity && resolvedRarity) {
+          existing.rarity = resolvedRarity;
+        }
+        if (!existing.bandId && itemDef?.bandId) {
+          existing.bandId = itemDef.bandId;
+        }
+        return;
+      }
+      source.items[itemId] = {
+        id: itemId,
+        name: resolvedName,
+        rarity: resolvedRarity,
+        bandId: typeof itemDef?.bandId === "string" ? itemDef.bandId : ""
+      };
+    }
+
+    Object.entries(sourceDefs).forEach(([sourceId, sourceDef]) => {
+      if (typeof sourceId !== "string" || !sourceId.trim()) {
+        return;
+      }
+      const resolvedSourceId = sourceId.trim();
+      const resolvedSourceDef = sourceDef && typeof sourceDef === "object" ? sourceDef : {};
+      ensureSource(resolvedSourceId, resolvedSourceDef);
+
+      const sourceItems = Array.isArray(resolvedSourceDef.items) ? resolvedSourceDef.items : [];
+      sourceItems.forEach((itemDef) => upsertSourceItem(resolvedSourceId, resolvedSourceDef, itemDef));
+
+      const autoFromRareDrops = resolvedSourceId === COLLECTION_DEFAULT_SOURCE_ID
+        ? resolvedSourceDef.autoFromRareDrops !== false
+        : Boolean(resolvedSourceDef.autoFromRareDrops);
+      if (!autoFromRareDrops) {
+        return;
+      }
+
+      Object.entries(expeditionBalance.rareBlueprintDrops || {}).forEach(([bandId, drops]) => {
+        const list = Array.isArray(drops) ? drops : [];
+        list.forEach((dropDef) => {
+          upsertSourceItem(resolvedSourceId, resolvedSourceDef, {
+            id: dropDef?.id,
+            name: dropDef?.name,
+            rarity: dropDef?.rarity,
+            bandId
+          });
+        });
+      });
+    });
+
+    const sources = Array.from(sourceMap.values())
+      .map((source) => {
+        const items = Object.values(source.items)
+          .sort((left, right) => {
+            const rarityDelta = (COLLECTION_RARITY_ORDER[right.rarity] || 0) - (COLLECTION_RARITY_ORDER[left.rarity] || 0);
+            if (rarityDelta !== 0) {
+              return rarityDelta;
+            }
+            return String(left.name || left.id).localeCompare(String(right.name || right.id));
+          });
+        return {
+          id: source.id,
+          name: source.name,
+          description: source.description,
+          items
+        };
+      })
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    const totalItems = sources.reduce((sum, source) => sum + source.items.length, 0);
+    return { sources, totalItems };
+  }
+
+  function registerCollectionDiscovery(sourceId, itemId, options = {}) {
+    const collection = getCollectionState();
+    const cleanItemId = typeof itemId === "string" ? itemId.trim() : "";
+    if (!cleanItemId) {
+      return { ok: false, reason: "Unknown collection item." };
+    }
+    const cleanSourceId = typeof sourceId === "string" && sourceId.trim()
+      ? sourceId.trim()
+      : COLLECTION_DEFAULT_SOURCE_ID;
+    const key = createCollectionItemKey(cleanSourceId, cleanItemId);
+    if (!key) {
+      return { ok: false, reason: "Unknown collection item." };
+    }
+
+    const discoveredItems = collection.discoveredItems;
+    const previousCount = Object.keys(discoveredItems).length;
+    if (discoveredItems[key]) {
+      return { ok: true, discovered: false, totalUnique: previousCount };
+    }
+
+    const catalog = options.catalog || getCollectionCatalog();
+    const sourceCatalog = catalog.sources.find((source) => source.id === cleanSourceId);
+    const itemCatalog = sourceCatalog?.items.find((item) => item.id === cleanItemId) || null;
+    const discoveredAt = clampInt(options.discoveredAt || Date.now());
+    const entry = {
+      sourceId: cleanSourceId,
+      itemId: cleanItemId,
+      name: typeof options.name === "string" && options.name.trim()
+        ? options.name.trim()
+        : (itemCatalog?.name || cleanItemId),
+      rarity: typeof options.rarity === "string" && options.rarity.trim()
+        ? options.rarity.trim().toLowerCase()
+        : (itemCatalog?.rarity || "rare"),
+      discoveredAt
+    };
+    discoveredItems[key] = entry;
+
+    const totalUnique = previousCount + 1;
+    if (!options.silent) {
+      eventBus.emit("collection:discovered", {
+        ...entry,
+        totalUnique
+      });
+      const milestones = getCollectionMilestones();
+      milestones.forEach((milestone) => {
+        if (collection.claimedMilestones[milestone.id]) {
+          return;
+        }
+        if (previousCount < milestone.requiredUnique && totalUnique >= milestone.requiredUnique) {
+          eventBus.emit("collection:milestoneReady", {
+            milestoneId: milestone.id,
+            name: milestone.name,
+            requiredUnique: milestone.requiredUnique,
+            totalUnique
+          });
+        }
+      });
+    }
+
+    return {
+      ok: true,
+      discovered: true,
+      totalUnique,
+      entry
+    };
+  }
+
+  function backfillCollectionFromLegacyInventory() {
+    const collection = getCollectionState();
+    if (collection.legacyBackfillDone) {
+      return;
+    }
+
+    const catalog = getCollectionCatalog();
+    const fallbackTimestamp = clampInt(state.meta?.startedAt || Date.now());
+    Object.entries(state.expeditions.blueprintInventory || {}).forEach(([dropId, count]) => {
+      if ((Number(count) || 0) <= 0) {
+        return;
+      }
+      registerCollectionDiscovery(COLLECTION_DEFAULT_SOURCE_ID, dropId, {
+        discoveredAt: fallbackTimestamp,
+        silent: true,
+        catalog
+      });
+    });
+
+    Object.entries(state.expeditions.partInventory || {}).forEach(([partRef, count]) => {
+      if ((Number(count) || 0) <= 0) {
+        return;
+      }
+      const parsedPart = shipSystem?.parsePartRef?.(partRef);
+      const partId = parsedPart?.partId || (typeof partRef === "string" ? partRef.trim() : "");
+      if (!partId) {
+        return;
+      }
+      registerCollectionDiscovery(COLLECTION_DEFAULT_SOURCE_ID, partId, {
+        discoveredAt: fallbackTimestamp,
+        silent: true,
+        catalog
+      });
+    });
+
+    Object.entries(getMapInventory()).forEach(([mapId, count]) => {
+      if ((Number(count) || 0) <= 0) {
+        return;
+      }
+      registerCollectionDiscovery(COLLECTION_DEFAULT_SOURCE_ID, mapId, {
+        discoveredAt: fallbackTimestamp,
+        silent: true,
+        catalog
+      });
+    });
+
+    collection.legacyBackfillDone = true;
+  }
+
+  function ensureCollectionReady() {
+    getCollectionState();
+    backfillCollectionFromLegacyInventory();
+  }
+
+  function getCollectionStatus() {
+    ensureCollectionReady();
+    const collection = getCollectionState();
+    const catalog = getCollectionCatalog();
+    const discoveredItems = collection.discoveredItems || {};
+    const uniqueDiscoveredTotal = Object.keys(discoveredItems).length;
+
+    const sources = catalog.sources.map((source) => {
+      const items = source.items.map((item) => {
+        const key = createCollectionItemKey(source.id, item.id);
+        const discoveredEntry = key ? discoveredItems[key] : null;
+        return {
+          ...item,
+          key,
+          discovered: Boolean(discoveredEntry),
+          discoveredAt: discoveredEntry?.discoveredAt || 0,
+          discoveredName: discoveredEntry?.name || item.name,
+          discoveredRarity: discoveredEntry?.rarity || item.rarity
+        };
+      });
+      const discoveredCount = items.filter((item) => item.discovered).length;
+      return {
+        ...source,
+        items,
+        discoveredCount,
+        totalItems: items.length
+      };
+    });
+
+    const trackableDiscovered = sources.reduce((sum, source) => sum + source.discoveredCount, 0);
+    const milestones = getCollectionMilestones().map((milestone) => {
+      const claimed = Boolean(collection.claimedMilestones[milestone.id]);
+      const ready = !claimed && uniqueDiscoveredTotal >= milestone.requiredUnique;
+      return {
+        ...milestone,
+        claimed,
+        ready,
+        currentUnique: uniqueDiscoveredTotal,
+        remaining: Math.max(0, milestone.requiredUnique - uniqueDiscoveredTotal)
+      };
+    });
+
+    return {
+      sources,
+      milestones,
+      totalTrackable: catalog.totalItems,
+      trackableDiscovered,
+      uniqueDiscoveredTotal,
+      completionFraction: catalog.totalItems > 0 ? trackableDiscovered / catalog.totalItems : 0
+    };
+  }
+
+  function claimCollectionMilestone(milestoneId) {
+    ensureCollectionReady();
+    const collection = getCollectionState();
+    const milestones = getCollectionMilestones();
+    const milestone = milestones.find((entry) => entry.id === milestoneId);
+    if (!milestone) {
+      return { ok: false, reason: "Unknown collection milestone." };
+    }
+    if (collection.claimedMilestones[milestone.id]) {
+      return { ok: false, reason: "Milestone already claimed." };
+    }
+
+    const totalUnique = Object.keys(collection.discoveredItems || {}).length;
+    if (totalUnique < milestone.requiredUnique) {
+      return {
+        ok: false,
+        reason: `Need ${milestone.requiredUnique} unique discoveries to claim this milestone.`
+      };
+    }
+
+    collection.claimedMilestones[milestone.id] = true;
+    if (typeof recompute === "function") {
+      recompute();
+    }
+    eventBus.emit("collection:milestoneClaimed", {
+      milestoneId: milestone.id,
+      name: milestone.name,
+      requiredUnique: milestone.requiredUnique,
+      effect: milestone.effect,
+      totalUnique
+    });
+
+    return {
+      ok: true,
+      milestone,
+      totalUnique
+    };
+  }
 
   function getContinuousConfig() {
     const config = expeditionBalance.continuous || {};
@@ -46,14 +455,17 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   }
 
   function getRewardsChest() {
+    const baseCapacity = Math.max(1, Math.floor(Number(expeditionBalance.rewardsChestCapacity) || 10));
+    const perkBonus = Math.max(0, Math.floor(Number(state.perks?.rewardsChestCapacityBonus) || 0));
+    const effectiveCapacity = baseCapacity + perkBonus;
     if (!state.expeditions.rewardsChest || typeof state.expeditions.rewardsChest !== "object") {
       state.expeditions.rewardsChest = {
-        capacity: Math.max(1, Math.floor(Number(expeditionBalance.rewardsChestCapacity) || 10)),
+        capacity: effectiveCapacity,
         items: []
       };
     }
     const chest = state.expeditions.rewardsChest;
-    chest.capacity = Math.max(1, Math.floor(Number(chest.capacity) || Number(expeditionBalance.rewardsChestCapacity) || 10));
+    chest.capacity = effectiveCapacity;
     if (!Array.isArray(chest.items)) {
       chest.items = [];
     }
@@ -174,6 +586,131 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     return Array.isArray(list) ? list : [];
   }
 
+  function getMapInventory() {
+    if (!state.expeditions.mapInventory || typeof state.expeditions.mapInventory !== "object") {
+      state.expeditions.mapInventory = {};
+    }
+    return state.expeditions.mapInventory;
+  }
+
+  function getUnlockedBandMapState() {
+    if (!state.expeditions.meta.unlockedBands || typeof state.expeditions.meta.unlockedBands !== "object") {
+      state.expeditions.meta.unlockedBands = {};
+    }
+    return state.expeditions.meta.unlockedBands;
+  }
+
+  function getPurchasedVoyagesState() {
+    if (!state.expeditions.meta.purchasedVoyages || typeof state.expeditions.meta.purchasedVoyages !== "object") {
+      state.expeditions.meta.purchasedVoyages = {};
+    }
+    return state.expeditions.meta.purchasedVoyages;
+  }
+
+  function getVoyagePurchaseIntelCost(band) {
+    const configured = Number(band?.purchaseIntelCost);
+    if (Number.isFinite(configured) && configured >= 0) {
+      return Math.max(0, Math.floor(configured));
+    }
+    return 0;
+  }
+
+  function isVoyagePurchased(bandId) {
+    const band = getBandById(bandId);
+    if (!band) {
+      return false;
+    }
+    if (getVoyagePurchaseIntelCost(band) <= 0) {
+      return true;
+    }
+    return Boolean(getPurchasedVoyagesState()[bandId]);
+  }
+
+  function getVoyageMapDef(mapId) {
+    const cleanMapId = typeof mapId === "string" ? mapId.trim() : "";
+    if (!cleanMapId) {
+      return null;
+    }
+    const raw = voyageMapDefs[cleanMapId];
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const unlocksBandId = typeof raw.unlocksBandId === "string" ? raw.unlocksBandId.trim() : "";
+    if (!unlocksBandId) {
+      return null;
+    }
+    const name = typeof raw.name === "string" && raw.name.trim()
+      ? raw.name.trim()
+      : toTitleToken(cleanMapId);
+    const description = typeof raw.description === "string" ? raw.description : "";
+    return {
+      id: cleanMapId,
+      name,
+      description,
+      unlocksBandId
+    };
+  }
+
+  function getVoyageMaps() {
+    const mapInventory = getMapInventory();
+    const unlockedBands = getUnlockedBandMapState();
+    return Object.keys(voyageMapDefs)
+      .map((mapId) => getVoyageMapDef(mapId))
+      .filter(Boolean)
+      .map((mapDef) => {
+        const targetBand = getBandById(mapDef.unlocksBandId);
+        return {
+          ...mapDef,
+          owned: Math.max(0, Number(mapInventory[mapDef.id]) || 0),
+          unlocked: Boolean(unlockedBands[mapDef.unlocksBandId]),
+          unlocksBandName: targetBand?.name || toTitleToken(mapDef.unlocksBandId)
+        };
+      })
+      .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+  }
+
+  function getBandMapRequirement(band) {
+    const requiredMapId = typeof band?.requiredMapId === "string" ? band.requiredMapId.trim() : "";
+    if (!requiredMapId) {
+      return {
+        ok: true,
+        requiredMapId: null,
+        mapName: "",
+        owned: 0,
+        unlocked: true
+      };
+    }
+
+    const mapDef = getVoyageMapDef(requiredMapId);
+    const mapName = mapDef?.name || toTitleToken(requiredMapId);
+    const mapInventory = getMapInventory();
+    const unlockedBands = getUnlockedBandMapState();
+    const owned = Math.max(0, Number(mapInventory[requiredMapId]) || 0);
+    const unlocked = Boolean(unlockedBands[band.id]);
+
+    if (unlocked) {
+      return {
+        ok: true,
+        requiredMapId,
+        mapName,
+        owned,
+        unlocked
+      };
+    }
+
+    const reason = owned > 0
+      ? `Use ${mapName} from map inventory to unlock this voyage.`
+      : `Requires voyage map: ${mapName}.`;
+    return {
+      ok: false,
+      reason,
+      requiredMapId,
+      mapName,
+      owned,
+      unlocked
+    };
+  }
+
   function hasRequiredNodes(band) {
     const requiredNodes = band.requiredNodes || [];
     return requiredNodes.every((nodeId) => Boolean(state.ascensionTree[nodeId]));
@@ -197,7 +734,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   function isBandUnlocked(bandId) {
     const band = getBandById(bandId);
     if (!band) {
-      return { ok: false, reason: "Unknown expedition band." };
+      return { ok: false, reason: "Unknown expedition voyage." };
     }
     if (unlockNodeId && !state.ascensionTree[unlockNodeId]) {
       return { ok: false, reason: "Unlock Expedition Keystone in the Ascend tab." };
@@ -214,6 +751,16 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     if (!hasRequiredNodes(band)) {
       return { ok: false, reason: "Missing required ascension branch nodes." };
     }
+    const mapRequirement = getBandMapRequirement(band);
+    if (!mapRequirement.ok) {
+      return {
+        ok: false,
+        reason: mapRequirement.reason,
+        requiredMapId: mapRequirement.requiredMapId,
+        mapName: mapRequirement.mapName,
+        mapOwned: mapRequirement.owned
+      };
+    }
     return { ok: true };
   }
 
@@ -221,12 +768,18 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     return bandDefs.map((band, index) => {
       const unlock = isBandUnlocked(band.id);
       const rank = index + 1;
-      const intelLaunchCost = getIntelLaunchCostForBand(band, Date.now(), rank);
+      const mapRequirement = getBandMapRequirement(band);
+      const requiredShip = typeof band.requiredShip === "string" ? band.requiredShip.trim() : "";
+      const purchaseIntelCost = getVoyagePurchaseIntelCost(band);
+      const purchased = isVoyagePurchased(band.id);
       return {
         ...band,
         rank,
         unlock,
-        intelLaunchCost
+        purchaseIntelCost,
+        purchased,
+        mapRequirement,
+        requiredShipName: requiredShip ? (shipDefs[requiredShip]?.name || toTitleToken(requiredShip)) : ""
       };
     });
   }
@@ -265,63 +818,46 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     return AUTO_ROUTE_MODES.has(mode) ? mode : "manual";
   }
 
-  function getPressureConfig() {
+  function buyVoyage(bandId) {
+    const band = getBandById(bandId);
+    if (!band) {
+      return { ok: false, reason: "Unknown expedition voyage." };
+    }
+
+    const unlock = isBandUnlocked(bandId);
+    if (!unlock.ok) {
+      return unlock;
+    }
+
+    const purchaseCost = getVoyagePurchaseIntelCost(band);
+    if (purchaseCost <= 0) {
+      return { ok: true, bandId, cost: 0, alreadyOwned: true };
+    }
+
+    const purchasedVoyages = getPurchasedVoyagesState();
+    if (purchasedVoyages[bandId]) {
+      return { ok: false, reason: "Voyage already purchased." };
+    }
+
+    const intel = Math.max(0, Number(state.expeditions.meta.intel) || 0);
+    if (intel < purchaseCost) {
+      return { ok: false, reason: `Need ${purchaseCost} Intel.` };
+    }
+
+    state.expeditions.meta.intel = intel - purchaseCost;
+    purchasedVoyages[bandId] = true;
+    eventBus.emit("expedition:voyagePurchased", {
+      bandId,
+      cost: purchaseCost,
+      remainingIntel: state.expeditions.meta.intel
+    });
+
     return {
-      minRank: Math.max(1, Math.floor(Number(expeditionBalance?.intelLaunchPressure?.minRank) || 3)),
-      windowSeconds: Math.max(10, Number(expeditionBalance?.intelLaunchPressure?.windowSeconds) || 600),
-      stackGrowth: Math.max(0.01, Number(expeditionBalance?.intelLaunchPressure?.stackGrowth) || 0.55),
-      maxStacks: Math.max(1, Math.floor(Number(expeditionBalance?.intelLaunchPressure?.maxStacks) || 6)),
-      maxFeeMultiplier: Math.max(1, Number(expeditionBalance?.intelLaunchPressure?.maxFeeMultiplier) || 3.5)
+      ok: true,
+      bandId,
+      cost: purchaseCost,
+      remainingIntel: state.expeditions.meta.intel
     };
-  }
-
-  function getPressureEntry(bandId) {
-    if (!state.expeditions.meta.intelPressure || typeof state.expeditions.meta.intelPressure !== "object") {
-      state.expeditions.meta.intelPressure = {};
-    }
-    if (!state.expeditions.meta.intelPressure[bandId] || typeof state.expeditions.meta.intelPressure[bandId] !== "object") {
-      state.expeditions.meta.intelPressure[bandId] = { stacks: 0, lastLaunchAt: 0 };
-    }
-    return state.expeditions.meta.intelPressure[bandId];
-  }
-
-  function getBaseIntelLaunchCost(band, rankHint = null) {
-    const base = Number(band?.intelLaunchCost);
-    if (Number.isFinite(base) && base >= 0) {
-      return base;
-    }
-    const rank = Math.max(1, Number(rankHint) || Number(band?.rank) || 1);
-    return rank <= 2 ? 0 : rank === 3 ? 8 : 14;
-  }
-
-  function getIntelLaunchCostForBand(band, now = Date.now(), rankHint = null) {
-    const rank = Math.max(1, Number(rankHint) || Number(band?.rank) || 1);
-    const baseIntelCost = Math.max(0, getBaseIntelLaunchCost(band, rank));
-    const pressure = getPressureConfig();
-    if (rank < pressure.minRank || baseIntelCost <= 0) {
-      return 0;
-    }
-    const entry = getPressureEntry(band.id);
-    const elapsedSeconds = entry.lastLaunchAt > 0 ? Math.max(0, (now - entry.lastLaunchAt) / 1000) : pressure.windowSeconds;
-    const decayWindows = Math.floor(elapsedSeconds / pressure.windowSeconds);
-    const decayedStacks = Math.max(0, entry.stacks - decayWindows);
-    const feeMultiplier = Math.min(
-      pressure.maxFeeMultiplier,
-      1 + decayedStacks * pressure.stackGrowth
-    );
-    return Math.max(0, Math.floor(baseIntelCost * feeMultiplier));
-  }
-
-  function applyIntelPressureLaunch(band, now = Date.now()) {
-    const rank = Math.max(1, Number(band?.rank) || 1);
-    const pressure = getPressureConfig();
-    const entry = getPressureEntry(band.id);
-    const elapsedSeconds = entry.lastLaunchAt > 0 ? Math.max(0, (now - entry.lastLaunchAt) / 1000) : pressure.windowSeconds;
-    const decayWindows = Math.floor(elapsedSeconds / pressure.windowSeconds);
-    const decayedStacks = Math.max(0, entry.stacks - decayWindows);
-    const nextStacks = rank < pressure.minRank ? 0 : Math.min(pressure.maxStacks, decayedStacks + 1);
-    entry.stacks = nextStacks;
-    entry.lastLaunchAt = now;
   }
 
   function stageVarianceConfigForBand(band) {
@@ -389,18 +925,18 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     const speedDelta = speedFactor - 1;
     const intelFlat = Number(choice.intelFlat) || 0;
     if (mode === "safe") {
-      return (-risk * 2.4) + (yieldDelta * 0.3) + (speedDelta * 0.15) + (intelFlat * 0.2);
+      return (-risk * 6) + (yieldDelta * 0.55) + (speedDelta * 0.25) + (intelFlat * 0.2);
     }
     if (mode === "aggressive") {
-      return (yieldDelta * 2.1) + (speedDelta * 0.8) + (intelFlat * 0.35) - (Math.max(0, risk) * 0.2);
+      return (risk * 4.5) + (yieldDelta * 1.8) + (speedDelta * 0.9) + (intelFlat * 0.25);
     }
-    return (yieldDelta * 1.1) + (speedDelta * 0.5) + (intelFlat * 0.3) - (Math.abs(risk) * 0.65);
+    return (yieldDelta * 1.15) + (speedDelta * 0.55) + (intelFlat * 0.3) - (Math.abs(risk) * 2.4);
   }
 
   function autoChooseRouteIfNeeded() {
     const run = state.expeditions.activeRun;
     if (!run || !run.awaitingChoice) {
-      return { ok: false, reason: "No route decision pending." };
+      return { ok: false, reason: "No voyage decision pending." };
     }
     const mode = normalizeAutoMode(run.autoRouteMode || state.expeditions.meta.autoRouteMode);
     if (mode === "manual") {
@@ -408,13 +944,13 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     }
     const options = (run.pendingChoices || []).filter((choice) => choice.unlocked);
     if (options.length === 0) {
-      return { ok: false, reason: "No unlocked route options." };
+      return { ok: false, reason: "No unlocked voyage options." };
     }
     const selected = options
       .map((choice) => ({ choice, score: scoreChoiceForMode(choice, mode) }))
       .sort((a, b) => b.score - a.score)[0]?.choice;
     if (!selected) {
-      return { ok: false, reason: "No route selected." };
+      return { ok: false, reason: "No voyage selected." };
     }
     const result = chooseRoute(selected.id);
     if (result.ok) {
@@ -471,6 +1007,8 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     const difficulty = clamp((encounter.difficulty || 0.4) + effectiveRisk * 0.35, 0.05, 0.98);
     const successChance = clamp(1 - difficulty * (1 - mitigation), 0.12, 0.96);
     const success = roll(run) <= successChance;
+    const shardProcChance = clamp(Number(state.perks.expeditionShardBonus) || 0, 0, 1);
+    const shardProc = success && roll(run) < shardProcChance ? 1 : 0;
 
     applyOutcome(run, success ? encounter.success : encounter.fail);
 
@@ -539,7 +1077,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
 
     const band = getBandById(bandId);
     if (!band) {
-      return { ok: false, reason: "Unknown expedition band." };
+      return { ok: false, reason: "Unknown expedition voyage." };
     }
     const ship = getSelectedShipContext();
     if (!ship) {
@@ -552,16 +1090,27 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       return unlock;
     }
 
+    const requiredShip = typeof band.requiredShip === "string" ? band.requiredShip.trim() : "";
+    if (requiredShip && ship.shipId !== requiredShip) {
+      const requiredShipName = shipDefs[requiredShip]?.name || toTitleToken(requiredShip);
+      return { ok: false, reason: `Requires ${requiredShipName} as the active ship.` };
+    }
+    if (!isVoyagePurchased(bandId)) {
+      const purchaseCost = getVoyagePurchaseIntelCost(band);
+      return {
+        ok: false,
+        reason: purchaseCost > 0
+          ? `Buy this voyage first (${purchaseCost} Intel).`
+          : "Voyage is not owned yet."
+      };
+    }
+
     const continuousConfig = getContinuousConfig();
     const launchCostMultiplier = automated ? continuousConfig.automationCostMultiplier : 1;
     const matterCost = Math.max(0, Math.floor((band.cost?.matter || 0) * launchCostMultiplier));
     const fireCost = Math.max(0, Math.floor((band.cost?.fire || 0) * launchCostMultiplier));
-    const baseIntelCost = Math.max(0, Math.floor((band.cost?.intel || 0) * launchCostMultiplier));
     const rank = getBandRank(bandId);
     band.rank = rank;
-    const rawIntelPressureCost = getIntelLaunchCostForBand(band, Date.now(), rank);
-    const intelPressureCost = Math.max(0, Math.floor(rawIntelPressureCost * launchCostMultiplier));
-    const totalIntelCost = baseIntelCost + intelPressureCost;
 
     if (!resourceManager.spend("matter", matterCost)) {
       return { ok: false, reason: `Need ${matterCost} Matter.` };
@@ -570,13 +1119,6 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       state.resources.matter += matterCost;
       return { ok: false, reason: `Need ${fireCost} Fire.` };
     }
-    if ((state.expeditions.meta.intel || 0) < totalIntelCost) {
-      state.resources.matter += matterCost;
-      state.resources.fire += fireCost;
-      return { ok: false, reason: `Need ${totalIntelCost} Intel.` };
-    }
-    state.expeditions.meta.intel = Math.max(0, Number(state.expeditions.meta.intel || 0) - totalIntelCost);
-    applyIntelPressureLaunch({ ...band, rank }, Date.now());
     setContinuousActive(bandId);
 
     const seed = (Date.now() + Math.floor(Math.random() * 1000000)) >>> 0;
@@ -594,6 +1136,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       segmentDurationSeconds: Math.max(6, (Number(band.durationSeconds) || 60) / stageCount / (perkSpeedMultiplier * shipSpeed)),
       stageCount,
       stageIndex: 0,
+      requiredShip: requiredShip || null,
       autoRouteMode: normalizeAutoMode(state.expeditions.meta.autoRouteMode),
       awaitingChoice: false,
       pendingChoices: [],
@@ -609,7 +1152,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       },
       seed,
       startedAt: Date.now(),
-      costs: { matter: matterCost, fire: fireCost, intel: totalIntelCost },
+      costs: { matter: matterCost, fire: fireCost, intel: 0 },
       launchCostMultiplier,
       automatedLaunch: automated,
       automationRewardMultiplier: automated ? getAutomationRewardMultiplier() : 1
@@ -626,9 +1169,6 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       bandId,
       stageCount,
       shipId: ship.shipId,
-      intelCost: totalIntelCost,
-      intelBaseCost: baseIntelCost,
-      intelPressureCost,
       automated,
       launchCostMultiplier
     });
@@ -658,6 +1198,8 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       expeditionBalance.maxSuccessChance || 0.95
     );
     const success = roll(run) <= successChance;
+    const shardProcChance = clamp(Number(state.perks.expeditionShardBonus) || 0, 0, 1);
+    const shardProc = success && roll(run) < shardProcChance ? 1 : 0;
 
     const variance = 0.9 + roll(run) * 0.25;
     const routeYield = clamp(1 + (run.modifiers.yieldDelta || 0), 0.2, 3);
@@ -676,7 +1218,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       ? {
           matter: Math.max(0, Math.floor((baseReward.matter || 0) * yieldMultiplier) + rewardFlat.matter - dampenedPenalty.matter),
           fire: Math.max(0, Math.floor((baseReward.fire || 0) * yieldMultiplier) + rewardFlat.fire - dampenedPenalty.fire),
-          shards: 0,
+          shards: Math.max(0, Math.floor((baseReward.shards || 0) * yieldMultiplier) + rewardFlat.shards + shardProc - dampenedPenalty.shards),
           intel: Math.max(0, Math.floor((baseReward.intel || 0) * intelMultiplier) + rewardFlat.intel)
         }
       : {
@@ -690,7 +1232,8 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     const scaledRewards = {
       matter: Math.max(0, Math.floor((rewards.matter || 0) * rewardMultiplier)),
       fire: Math.max(0, Math.floor((rewards.fire || 0) * rewardMultiplier)),
-      shards: Math.max(0, Math.floor((rewards.shards || 0) * rewardMultiplier)),
+      // Keep binary shard procs intact even for automated runs.
+      shards: Math.max(0, Math.floor(rewards.shards || 0)),
       intel: Math.max(0, Math.floor((rewards.intel || 0) * rewardMultiplier))
     };
 
@@ -766,20 +1309,20 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       return { ok: false, reason: "No active expedition." };
     }
     if (!run.awaitingChoice) {
-      return { ok: false, reason: "No route decision pending." };
+      return { ok: false, reason: "No voyage decision pending." };
     }
 
     const band = getBandById(run.bandId);
     if (!band) {
-      return { ok: false, reason: "Unknown expedition band." };
+      return { ok: false, reason: "Unknown expedition voyage." };
     }
 
     const choice = (run.pendingChoices || []).find((item) => item.id === choiceId);
     if (!choice) {
-      return { ok: false, reason: "Invalid route choice." };
+      return { ok: false, reason: "Invalid voyage choice." };
     }
     if (!choice.unlocked) {
-      return { ok: false, reason: choice.lockReason || "Route is locked by ascension requirements." };
+      return { ok: false, reason: choice.lockReason || "Voyage option is locked by ascension requirements." };
     }
 
     applyOutcome(run, {
@@ -865,6 +1408,7 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   }
 
   function claimChestEntry(entry) {
+    ensureCollectionReady();
     const rewards = entry?.rewards || {};
     const policy = expeditionBalance.duplicateBlueprintPolicy || {};
     const drops = Array.isArray(entry?.drops) ? entry.drops : [];
@@ -875,7 +1419,11 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       if (!drop?.id) {
         return;
       }
-      if (drop.blueprintForShip) {
+      const mapDef = getVoyageMapDef(drop.id);
+      if (mapDef) {
+        const mapInventory = getMapInventory();
+        mapInventory[mapDef.id] = Math.max(0, Number(mapInventory[mapDef.id]) || 0) + 1;
+      } else if (drop.blueprintForShip) {
         const existing = state.expeditions.blueprintInventory[drop.id] || 0;
         if (existing > 0) {
           duplicateIntel += Math.max(0, Number(policy.intelPerDuplicate) || 0);
@@ -886,6 +1434,12 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       } else {
         state.expeditions.partInventory[drop.id] = (state.expeditions.partInventory[drop.id] || 0) + 1;
       }
+
+      registerCollectionDiscovery(COLLECTION_DEFAULT_SOURCE_ID, drop.id, {
+        name: drop.name || drop.id,
+        rarity: drop.rarity || "rare",
+        discoveredAt: Date.now()
+      });
     });
 
     resourceManager.add("matter", rewards.matter || 0);
@@ -903,6 +1457,52 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       drops,
       duplicateIntel,
       duplicateShards
+    };
+  }
+
+  function useVoyageMap(mapId) {
+    const mapDef = getVoyageMapDef(mapId);
+    if (!mapDef) {
+      return { ok: false, reason: "Unknown voyage map." };
+    }
+
+    const targetBand = getBandById(mapDef.unlocksBandId);
+    if (!targetBand) {
+      return { ok: false, reason: "This map has no valid voyage to unlock." };
+    }
+
+    const unlockedBands = getUnlockedBandMapState();
+    if (unlockedBands[targetBand.id]) {
+      return { ok: false, reason: `${targetBand.name} is already unlocked.` };
+    }
+
+    const mapInventory = getMapInventory();
+    const owned = Math.max(0, Number(mapInventory[mapDef.id]) || 0);
+    if (owned <= 0) {
+      return { ok: false, reason: `Missing ${mapDef.name}.` };
+    }
+
+    if (owned <= 1) {
+      delete mapInventory[mapDef.id];
+    } else {
+      mapInventory[mapDef.id] = owned - 1;
+    }
+    unlockedBands[targetBand.id] = true;
+
+    eventBus.emit("expedition:mapUsed", {
+      mapId: mapDef.id,
+      mapName: mapDef.name,
+      bandId: targetBand.id,
+      bandName: targetBand.name
+    });
+
+    return {
+      ok: true,
+      mapId: mapDef.id,
+      mapName: mapDef.name,
+      bandId: targetBand.id,
+      bandName: targetBand.name,
+      remaining: Math.max(0, Number(mapInventory[mapDef.id]) || 0)
     };
   }
 
@@ -1063,7 +1663,6 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     continuous.active = false;
     continuous.bandId = null;
     continuous.stopReason = "";
-    state.expeditions.meta.intelPressure = {};
   }
 
   function setAutoRouteMode(mode) {
@@ -1079,8 +1678,10 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
   }
 
   function getStatus() {
+    ensureCollectionReady();
     const chest = getRewardsChest();
     const continuous = getContinuousState();
+    const mapInventory = getMapInventory();
     const pendingFallback = chest.items.length > 0 ? chest.items[0] : null;
     return {
       unlockNodeId,
@@ -1092,6 +1693,9 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
       rewardsChest: chest,
       continuous,
       meta: state.expeditions.meta,
+      mapInventory: { ...mapInventory },
+      voyageMaps: getVoyageMaps(),
+      collection: getCollectionStatus(),
       autoRouteMode: normalizeAutoMode(state.expeditions.meta.autoRouteMode),
       bands: getBands()
     };
@@ -1109,6 +1713,12 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
     claimChestOne,
     claimChestAll,
     getClaimAllPreview,
+    useVoyageMap,
+    buyVoyage,
+    getVoyageMaps,
+    registerCollectionDiscovery,
+    getCollectionStatus,
+    claimCollectionMilestone,
     abandon,
     stopContinuous,
     handleAscendReset

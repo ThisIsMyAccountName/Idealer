@@ -15,6 +15,7 @@ Implemented:
 - Prestige action (`Ascend`) with soft reset and permanent multiplier
 - Upgrades tab with unlock-gated permanent run bonuses
 - Research tab with level-based unlock-gated progression nodes
+- Collection tab for rare expedition drops with hidden placeholders, completion tracking, and claimable milestone perks
 - Autosave every 30s + save on tab close
 - Offline gains based on elapsed time at 50% efficiency
 - Responsive single-screen GUI

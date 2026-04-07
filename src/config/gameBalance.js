@@ -102,7 +102,7 @@ export const BALANCE = {
     quadCap: 35,
     quadScale: 0.013,
     targetEnd: 1e31,
-    unlockCostFactor: 0.9,
+    unlockCostFactor: 0.5,
     autoBalance: true
   },
   researchCostDefaults: {
@@ -116,15 +116,9 @@ export const BALANCE = {
   expeditions: {
     unlockNodeId: "expeditionKeystone",
     offlineProgressMultiplier: 0.55,
+    rewardsChestCapacity: 10,
     minSuccessChance: 0.15,
     maxSuccessChance: 0.95,
-    intelLaunchPressure: {
-      minRank: 3,
-      windowSeconds: 540,
-      stackGrowth: 0.55,
-      maxStacks: 6,
-      maxFeeMultiplier: 3.4
-    },
     defaultStageVarianceRanges: {
       riskDelta: { min: -0.03, max: 0.04 },
       yieldDelta: { min: -0.04, max: 0.05 },
@@ -135,8 +129,36 @@ export const BALANCE = {
       raft: {
         id: "raft",
         name: "Raft",
-        purchaseCost: { matter: 0, fire: 0, shards: 0 },
+        purchaseCost: { matter: 0, fire: 0, intel: 0 },
         unlock: { type: "ascensionNode", value: "expeditionKeystone" },
+        facilityProfile: {
+          hull: {
+            maxLevel: 4,
+            effectsPerLevel: {
+              penaltyDampening: 0.018,
+              riskMitigation: 0.006
+            }
+          },
+          sail: {
+            maxLevel: 4,
+            effectsPerLevel: {
+              speedMultiplier: 0.03
+            }
+          },
+          anchor: {
+            maxLevel: 4,
+            effectsPerLevel: {
+              riskMitigation: 0.014
+            }
+          },
+          net: {
+            maxLevel: 4,
+            effectsPerLevel: {
+              rareDropWeight: 0.035,
+              yieldMultiplier: 0.008
+            }
+          }
+        },
         visual: {
           theme: "raft",
           asset: "assets/ships/raft.svg",
@@ -167,9 +189,37 @@ export const BALANCE = {
       sloop: {
         id: "sloop",
         name: "Sloop",
-        purchaseCost: { matter: 9000, fire: 180, shards: 8 },
+        purchaseCost: { matter: 9000, fire: 180, intel: 180 },
         unlock: { type: "ascensionNode", value: "cartographerSpindle" },
         requiredBlueprint: "ship:sloop:keel-plan",
+        facilityProfile: {
+          hull: {
+            maxLevel: 6,
+            effectsPerLevel: {
+              penaltyDampening: 0.024,
+              riskMitigation: 0.008
+            }
+          },
+          sail: {
+            maxLevel: 8,
+            effectsPerLevel: {
+              speedMultiplier: 0.045
+            }
+          },
+          anchor: {
+            maxLevel: 5,
+            effectsPerLevel: {
+              riskMitigation: 0.018
+            }
+          },
+          net: {
+            maxLevel: 6,
+            effectsPerLevel: {
+              rareDropWeight: 0.045,
+              yieldMultiplier: 0.01
+            }
+          }
+        },
         visual: {
           theme: "sloop",
           asset: "assets/ships/sloop.svg",
@@ -200,9 +250,37 @@ export const BALANCE = {
       brig: {
         id: "brig",
         name: "Brig",
-        purchaseCost: { matter: 28000, fire: 520, shards: 22 },
+        purchaseCost: { matter: 28000, fire: 520, intel: 620 },
         unlock: { type: "ascensionNode", value: "hazardSeals" },
         requiredBlueprint: "ship:brig:frame-draft",
+        facilityProfile: {
+          hull: {
+            maxLevel: 9,
+            effectsPerLevel: {
+              penaltyDampening: 0.032,
+              riskMitigation: 0.015
+            }
+          },
+          sail: {
+            maxLevel: 7,
+            effectsPerLevel: {
+              speedMultiplier: 0.038
+            }
+          },
+          anchor: {
+            maxLevel: 10,
+            effectsPerLevel: {
+              riskMitigation: 0.032
+            }
+          },
+          net: {
+            maxLevel: 8,
+            effectsPerLevel: {
+              rareDropWeight: 0.055,
+              yieldMultiplier: 0.013
+            }
+          }
+        },
         visual: {
           theme: "brig",
           asset: "assets/ships/brig.svg",
@@ -233,9 +311,37 @@ export const BALANCE = {
       galleon: {
         id: "galleon",
         name: "Galleon",
-        purchaseCost: { matter: 75000, fire: 1400, shards: 55 },
+        purchaseCost: { matter: 75000, fire: 1400, intel: 1600 },
         unlock: { type: "ascensionNodeCount", value: 24 },
         requiredBlueprint: "ship:galleon:royal-charter",
+        facilityProfile: {
+          hull: {
+            maxLevel: 12,
+            effectsPerLevel: {
+              penaltyDampening: 0.042,
+              riskMitigation: 0.012
+            }
+          },
+          sail: {
+            maxLevel: 10,
+            effectsPerLevel: {
+              speedMultiplier: 0.09
+            }
+          },
+          anchor: {
+            maxLevel: 12,
+            effectsPerLevel: {
+              riskMitigation: 0.024
+            }
+          },
+          net: {
+            maxLevel: 14,
+            effectsPerLevel: {
+              rareDropWeight: 0.08,
+              yieldMultiplier: 0.022
+            }
+          }
+        },
         visual: {
           theme: "galleon",
           asset: "assets/ships/galleon.svg",
@@ -331,6 +437,18 @@ export const BALANCE = {
       intelPerDuplicate: 4,
       shardsPerDuplicate: 0
     },
+    voyageMaps: {
+      "map:abyssal-atlas": {
+        name: "Abyssal Atlas",
+        description: "A pressure-scored atlas describing hidden descent spirals.",
+        unlocksBandId: "abyssal-run"
+      },
+      "map:sunken-registry": {
+        name: "Sunken Registry",
+        description: "A sovereign ledger charting old command lanes through the rift bed.",
+        unlocksBandId: "sunken-registry-run"
+      }
+    },
     rareBlueprintDrops: {
       "initiate-run": [
         {
@@ -344,12 +462,66 @@ export const BALANCE = {
           effects: { speedMultiplier: 0.05, yieldMultiplier: 0.015 }
         },
         {
+          id: "part:raft:net:trawl-lines",
+          name: "Braided Trawl Lines",
+          rarity: "semi-rare",
+          chance: 0.065,
+          fromPool: ["standard", "volatile"],
+          shipId: "raft",
+          slot: "net",
+          effects: { rareDropWeight: 0.05, yieldMultiplier: 0.01 }
+        },
+        {
           id: "ship:sloop:keel-plan",
           name: "Sloop Keel Plan",
           rarity: "rare",
           chance: 0.9,
           fromPool: ["volatile", "standard"],
           blueprintForShip: "sloop"
+        }
+      ],
+      "drift-net-run": [
+        {
+          id: "part:raft:anchor:tide-pin",
+          name: "Tide-Pin Anchor",
+          rarity: "rare",
+          chance: 0.055,
+          fromPool: ["stability", "netline"],
+          shipId: "raft",
+          slot: "anchor",
+          effects: { riskMitigation: 0.035, penaltyDampening: 0.05 }
+        },
+        {
+          id: "part:raft:sail:wind-lattice",
+          name: "Wind Lattice Sail",
+          rarity: "semi-rare",
+          chance: 0.07,
+          fromPool: ["standard", "netline"],
+          shipId: "raft",
+          slot: "sail",
+          effects: { speedMultiplier: 0.06, yieldMultiplier: 0.012 }
+        }
+      ],
+      "forager-run": [
+        {
+          id: "part:raft:hull:current-baffles",
+          name: "Current Baffles",
+          rarity: "rare",
+          chance: 0.048,
+          fromPool: ["stability", "reconnaissance"],
+          shipId: "raft",
+          slot: "hull",
+          effects: { penaltyDampening: 0.07, riskMitigation: 0.018 }
+        },
+        {
+          id: "part:sloop:net:signal-knots",
+          name: "Signal Knot Netting",
+          rarity: "rare",
+          chance: 0.036,
+          fromPool: ["standard", "reconnaissance"],
+          shipId: "sloop",
+          slot: "net",
+          effects: { rareDropWeight: 0.06, yieldMultiplier: 0.015 }
         }
       ],
       "architect-run": [
@@ -364,12 +536,51 @@ export const BALANCE = {
           effects: { riskMitigation: 0.04, penaltyDampening: 0.05 }
         },
         {
+          id: "part:sloop:hull:pressure-rivets",
+          name: "Pressure Rivets",
+          rarity: "rare",
+          chance: 0.038,
+          fromPool: ["stability", "cartographer"],
+          shipId: "sloop",
+          slot: "hull",
+          effects: { penaltyDampening: 0.08, riskMitigation: 0.02 }
+        },
+        {
           id: "ship:brig:frame-draft",
           name: "Brig Frame Draft",
           rarity: "rare",
           chance: 0.025,
           fromPool: ["volatile", "cartographer"],
           blueprintForShip: "brig"
+        },
+        {
+          id: "map:abyssal-atlas",
+          name: "Abyssal Atlas",
+          rarity: "epic",
+          chance: 0.012,
+          fromPool: ["cartographer", "volatile"]
+        }
+      ],
+      "courier-run": [
+        {
+          id: "part:sloop:sail:slipstream-cloth",
+          name: "Slipstream Sailcloth",
+          rarity: "epic",
+          chance: 0.03,
+          fromPool: ["courier", "volatile"],
+          shipId: "sloop",
+          slot: "sail",
+          effects: { speedMultiplier: 0.08, yieldMultiplier: 0.02 }
+        },
+        {
+          id: "part:sloop:anchor:smuggler-heel",
+          name: "Smuggler Heel Anchor",
+          rarity: "rare",
+          chance: 0.042,
+          fromPool: ["stability", "courier"],
+          shipId: "sloop",
+          slot: "anchor",
+          effects: { riskMitigation: 0.045, penaltyDampening: 0.06 }
         }
       ],
       "sovereign-run": [
@@ -384,15 +595,115 @@ export const BALANCE = {
           effects: { penaltyDampening: 0.12, riskMitigation: 0.03 }
         },
         {
+          id: "part:brig:sail:rift-fabric",
+          name: "Rift Fabric Main Sail",
+          rarity: "epic",
+          chance: 0.028,
+          fromPool: ["volatile", "sealed"],
+          shipId: "brig",
+          slot: "sail",
+          effects: { speedMultiplier: 0.06, yieldMultiplier: 0.03 }
+        },
+        {
           id: "ship:galleon:royal-charter",
           name: "Royal Charter",
           rarity: "epic",
           chance: 0.02,
           fromPool: ["sealed", "volatile"],
           blueprintForShip: "galleon"
+        },
+        {
+          id: "map:sunken-registry",
+          name: "Sunken Registry",
+          rarity: "legendary",
+          chance: 0.008,
+          fromPool: ["sealed", "salvage"]
+        }
+      ],
+      "abyssal-run": [
+        {
+          id: "part:brig:net:echo-trawl",
+          name: "Echo Trawl Grid",
+          rarity: "epic",
+          chance: 0.03,
+          fromPool: ["abyssal-hunt", "sealed"],
+          shipId: "brig",
+          slot: "net",
+          effects: { rareDropWeight: 0.12, yieldMultiplier: 0.02 }
+        },
+        {
+          id: "part:galleon:anchor:pilot-keel",
+          name: "Pilot Keel Anchor",
+          rarity: "epic",
+          chance: 0.018,
+          fromPool: ["charted", "abyssal-hunt"],
+          shipId: "galleon",
+          slot: "anchor",
+          effects: { riskMitigation: 0.06, penaltyDampening: 0.08 }
+        }
+      ],
+      "sunken-registry-run": [
+        {
+          id: "part:galleon:hull:imperial-rib",
+          name: "Imperial Rift Rib",
+          rarity: "legendary",
+          chance: 0.02,
+          fromPool: ["command", "registry"],
+          shipId: "galleon",
+          slot: "hull",
+          effects: { penaltyDampening: 0.16, riskMitigation: 0.04 }
+        },
+        {
+          id: "part:galleon:net:star-sieve",
+          name: "Star Sieve Net",
+          rarity: "legendary",
+          chance: 0.015,
+          fromPool: ["registry", "cataclysm"],
+          shipId: "galleon",
+          slot: "net",
+          effects: { rareDropWeight: 0.16, yieldMultiplier: 0.05 }
         }
       ]
     },
+    collectionSources: {
+      expeditionRareDrops: {
+        name: "Expedition Rare Drops",
+        description: "Track every rare blueprint and ship part recovered from voyages.",
+        autoFromRareDrops: true
+      }
+    },
+    collectionMilestones: [
+      {
+        id: "collectionSurveyorLedger",
+        requiredUnique: 1,
+        name: "Surveyor Ledger",
+        description: "+3% Matter production and +4% expedition speed.",
+        effect: {
+          matterRateMultiplier: 1.03,
+          expeditionSpeedMultiplier: 1.04
+        }
+      },
+      {
+        id: "collectionArchivistSeal",
+        requiredUnique: 3,
+        name: "Archivist Seal",
+        description: "+3% all production and +8% expedition intel gain.",
+        effect: {
+          productionMultiplier: 1.03,
+          expeditionIntelMultiplier: 1.08
+        }
+      },
+      {
+        id: "collectionVoidCartography",
+        requiredUnique: 6,
+        name: "Void Cartography",
+        description: "+6% shard gain and +3% expedition risk mitigation.",
+        effect: {
+          prestigeGainMultiplier: 1.06,
+          expeditionRiskMitigation: 0.03
+        }
+      }
+    ],
     defaultRouteChoices: [
       {
         id: "shielded",
@@ -433,9 +744,9 @@ export const BALANCE = {
         durationSeconds: 60,
         stageCount: 2,
         risk: 0.18,
-        cost: { matter: 1200, fire: 20, intel: 0 },
+        cost: { matter: 1200, fire: 20 },
         unlock: { type: "ascensionNodeCount", value: 2 },
-        intelLaunchCost: 0,
+        purchaseIntelCost: 0,
         rewards: { matter: 2400, fire: 28, shards: 0, intel: 5 },
         stageVarianceRanges: {
           riskDelta: { min: -0.03, max: 0.035 },
@@ -500,16 +811,204 @@ export const BALANCE = {
         }
       },
       {
+        id: "drift-net-run",
+        name: "Drift-Net Charter",
+        description: "A paid raft charter focused on wake trawling and intel scouting.",
+        durationSeconds: 70,
+        stageCount: 2,
+        risk: 0.24,
+        cost: { matter: 3300, fire: 44 },
+        unlock: { type: "ascensionNodeCount", value: 4 },
+        requiredNodes: ["expeditionKeystone"],
+        requiredShip: "raft",
+        purchaseIntelCost: 650,
+        rewards: { matter: 5600, fire: 82, shards: 0, intel: 9 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.04, max: 0.05 },
+          yieldDelta: { min: -0.06, max: 0.07 },
+          speedMultiplier: { min: 0.93, max: 1.09 },
+          intelFlat: { min: 0, max: 2 }
+        },
+        routeChoices: [
+          {
+            id: "shielded",
+            name: "Shielded Conduits",
+            description: "Stabilize drift pressure for safer but smaller hauls.",
+            riskDelta: -0.08,
+            yieldDelta: -0.1,
+            speedMultiplier: 0.91,
+            intelFlat: 1,
+            encounterPool: "stability"
+          },
+          {
+            id: "balanced",
+            name: "Balanced Route",
+            description: "Hold course through standard wake pockets.",
+            riskDelta: 0,
+            yieldDelta: 0,
+            speedMultiplier: 1,
+            intelFlat: 0,
+            encounterPool: "standard"
+          },
+          {
+            id: "overclocked",
+            name: "Overclocked Lanes",
+            description: "Push the raft rig hard for faster extraction.",
+            riskDelta: 0.11,
+            yieldDelta: 0.15,
+            speedMultiplier: 1.12,
+            intelFlat: -1,
+            encounterPool: "volatile"
+          },
+          {
+            id: "netline-skim",
+            name: "Netline Skim",
+            description: "Sweep a narrow trawl line for above-average intel.",
+            riskDelta: 0.03,
+            yieldDelta: 0.08,
+            speedMultiplier: 1.04,
+            intelFlat: 2,
+            encounterPool: "netline"
+          }
+        ],
+        encounters: [
+          {
+            id: "drift-net-buoy",
+            name: "Dead Buoy Cluster",
+            description: "A buoy graveyard may hide sealed salvage crates.",
+            difficulty: 0.39,
+            success: { yieldDelta: 0.09, intelFlat: 2 },
+            fail: { riskDelta: 0.06, matterPenalty: 320 }
+          },
+          {
+            id: "drift-net-snag",
+            name: "Cable Snag",
+            description: "A snapped cable tangles your trawl frame.",
+            difficulty: 0.4,
+            success: { fireFlat: 12, intelFlat: 1 },
+            fail: { riskDelta: 0.07, firePenalty: 10 }
+          },
+          {
+            id: "drift-net-echo",
+            name: "Echo Current",
+            description: "A turbulent echo current can amplify pickup volume.",
+            difficulty: 0.42,
+            success: { yieldDelta: 0.11, intelFlat: 2 },
+            fail: { riskDelta: 0.08, yieldDelta: -0.06 }
+          }
+        ],
+        encounterPools: {
+          stability: ["drift-net-buoy"],
+          standard: ["drift-net-buoy", "drift-net-snag"],
+          volatile: ["drift-net-snag", "drift-net-echo"],
+          netline: ["drift-net-echo", "drift-net-buoy"]
+        }
+      },
+      {
+        id: "forager-run",
+        name: "Forager Side Current",
+        description: "A niche side-route tuned for intel haul and fast reset loops.",
+        durationSeconds: 74,
+        stageCount: 2,
+        risk: 0.26,
+        cost: { matter: 4100, fire: 52 },
+        unlock: { type: "ascensionNodeCount", value: 6 },
+        requiredNodes: ["expeditionKeystone"],
+        purchaseIntelCost: 250,
+        rewards: { matter: 6300, fire: 95, shards: 0, intel: 14 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.05, max: 0.055 },
+          yieldDelta: { min: -0.07, max: 0.08 },
+          speedMultiplier: { min: 0.93, max: 1.1 },
+          intelFlat: { min: 1, max: 3 }
+        },
+        routeChoices: [
+          {
+            id: "shielded",
+            name: "Shielded Conduits",
+            description: "Skim safer side currents with lower haul throughput.",
+            riskDelta: -0.09,
+            yieldDelta: -0.12,
+            speedMultiplier: 0.92,
+            intelFlat: 2,
+            encounterPool: "stability"
+          },
+          {
+            id: "balanced",
+            name: "Balanced Route",
+            description: "Standard drift route with steady intel yield.",
+            riskDelta: 0,
+            yieldDelta: 0,
+            speedMultiplier: 1,
+            intelFlat: 1,
+            encounterPool: "standard"
+          },
+          {
+            id: "overclocked",
+            name: "Overclocked Lanes",
+            description: "Push hull flow for quicker extraction at higher risk.",
+            riskDelta: 0.14,
+            yieldDelta: 0.16,
+            speedMultiplier: 1.14,
+            intelFlat: -1,
+            encounterPool: "volatile"
+          },
+          {
+            id: "reconnaissance-hop",
+            name: "Reconnaissance Hop",
+            description: "Chart a bespoke scouting arc for high intel pull.",
+            requiredNodes: ["cartographerSpindle"],
+            riskDelta: -0.02,
+            yieldDelta: 0.06,
+            speedMultiplier: 1.08,
+            intelFlat: 3,
+            encounterPool: "reconnaissance"
+          }
+        ],
+        encounters: [
+          {
+            id: "forager-signal-bloom",
+            name: "Signal Bloom",
+            description: "A burst of dormant telemetry can be harvested for intel.",
+            difficulty: 0.43,
+            success: { yieldDelta: 0.08, intelFlat: 3 },
+            fail: { riskDelta: 0.06, intelFlat: -1 }
+          },
+          {
+            id: "forager-scuttle-cache",
+            name: "Scuttle Cache",
+            description: "A stripped cargo pod might still carry useful fuel cells.",
+            difficulty: 0.41,
+            success: { fireFlat: 14, intelFlat: 1 },
+            fail: { riskDelta: 0.05, matterPenalty: 420 }
+          },
+          {
+            id: "forager-phantom-ledger",
+            name: "Phantom Ledger",
+            description: "A fragmented ledger can reveal profitable relay detours.",
+            difficulty: 0.46,
+            success: { yieldDelta: 0.1, intelFlat: 4 },
+            fail: { riskDelta: 0.07, firePenalty: 16 }
+          }
+        ],
+        encounterPools: {
+          stability: ["forager-signal-bloom"],
+          standard: ["forager-signal-bloom", "forager-scuttle-cache"],
+          volatile: ["forager-scuttle-cache"],
+          reconnaissance: ["forager-phantom-ledger", "forager-signal-bloom"]
+        }
+      },
+      {
         id: "architect-run",
         name: "Architect Pressure Route",
         description: "High-pressure vaults with unstable extraction channels.",
         durationSeconds: 95,
         stageCount: 3,
         risk: 0.28,
-        cost: { matter: 5200, fire: 60, intel: 3 },
+        cost: { matter: 5200, fire: 60 },
         unlock: { type: "ascensionNodeCount", value: 7 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle"],
-        intelLaunchCost: 5,
+        purchaseIntelCost: 0,
         rewards: { matter: 9600, fire: 120, shards: 0, intel: 11 },
         stageVarianceRanges: {
           riskDelta: { min: -0.04, max: 0.05 },
@@ -594,16 +1093,111 @@ export const BALANCE = {
         }
       },
       {
+        id: "courier-run",
+        name: "Courier Blacklane",
+        description: "A paid sloop contract through sealed courier lanes and interception grids.",
+        durationSeconds: 122,
+        stageCount: 3,
+        risk: 0.35,
+        cost: { matter: 12000, fire: 165 },
+        unlock: { type: "ascensionNodeCount", value: 11 },
+        requiredNodes: ["expeditionKeystone", "cartographerSpindle"],
+        requiredShip: "sloop",
+        purchaseIntelCost: 2200,
+        rewards: { matter: 24500, fire: 360, shards: 0, intel: 22 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.05, max: 0.06 },
+          yieldDelta: { min: -0.08, max: 0.1 },
+          speedMultiplier: { min: 0.92, max: 1.12 },
+          intelFlat: { min: 1, max: 4 }
+        },
+        routeChoices: [
+          {
+            id: "shielded",
+            name: "Shielded Conduits",
+            description: "Prioritize stealth relays over hauling speed.",
+            riskDelta: -0.11,
+            yieldDelta: -0.13,
+            speedMultiplier: 0.9,
+            intelFlat: 2,
+            encounterPool: "stability"
+          },
+          {
+            id: "balanced",
+            name: "Balanced Route",
+            description: "Thread normal courier lanes with steady output.",
+            riskDelta: 0,
+            yieldDelta: 0,
+            speedMultiplier: 1,
+            intelFlat: 1,
+            encounterPool: "standard"
+          },
+          {
+            id: "overclocked",
+            name: "Overclocked Lanes",
+            description: "Run hot through contested checkpoints for bigger haul.",
+            riskDelta: 0.15,
+            yieldDelta: 0.24,
+            speedMultiplier: 1.14,
+            intelFlat: 0,
+            encounterPool: "volatile"
+          },
+          {
+            id: "courier-slit",
+            name: "Courier Slit",
+            description: "Use charted slit passages for high intel extraction.",
+            requiredNodes: ["cartographerSpindle"],
+            riskDelta: -0.01,
+            yieldDelta: 0.12,
+            speedMultiplier: 1.08,
+            intelFlat: 4,
+            encounterPool: "courier"
+          }
+        ],
+        encounters: [
+          {
+            id: "courier-ward",
+            name: "Courier Warden Sweep",
+            description: "Dormant wardens scan your signature and tighten lanes.",
+            difficulty: 0.52,
+            success: { yieldDelta: 0.14, intelFlat: 4 },
+            fail: { riskDelta: 0.1, matterPenalty: 1400 }
+          },
+          {
+            id: "courier-cache",
+            name: "Black Cache",
+            description: "A smuggler cache can be cracked for elite fuel bundles.",
+            difficulty: 0.49,
+            success: { yieldDelta: 0.12, fireFlat: 46 },
+            fail: { riskDelta: 0.09, firePenalty: 34 }
+          },
+          {
+            id: "courier-ambush",
+            name: "Interception Ambush",
+            description: "An interception wing collapses your extraction corridor.",
+            difficulty: 0.55,
+            success: { yieldDelta: 0.17, intelFlat: 5 },
+            fail: { riskDelta: 0.12, yieldDelta: -0.1, intelFlat: -2 }
+          }
+        ],
+        encounterPools: {
+          stability: ["courier-ward"],
+          standard: ["courier-ward", "courier-cache"],
+          volatile: ["courier-cache", "courier-ambush"],
+          courier: ["courier-ambush", "courier-ward"]
+        }
+      },
+      {
         id: "sovereign-run",
         name: "Sovereign Anomaly Rift",
         description: "A sovereign-tier descent into volatile arcane machinery.",
         durationSeconds: 140,
         stageCount: 4,
         risk: 0.38,
-        cost: { matter: 16000, fire: 210, intel: 8 },
+        cost: { matter: 16000, fire: 210 },
         unlock: { type: "ascensionNodeCount", value: 13 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals"],
-        intelLaunchCost: 10,
+        purchaseIntelCost: 0,
         rewards: { matter: 36000, fire: 460, shards: 0, intel: 21 },
         stageVarianceRanges: {
           riskDelta: { min: -0.05, max: 0.06 },
@@ -706,6 +1300,258 @@ export const BALANCE = {
           sealed: ["vault-harmonics", "rift-storm"],
           salvage: ["salvage-surge", "void-gate"]
         }
+      },
+      {
+        id: "abyssal-run",
+        name: "Abyssal Cartographer Descent",
+        description: "A charted plunge through trench machinery and drowned archives.",
+        durationSeconds: 180,
+        stageCount: 5,
+        risk: 0.46,
+        cost: { matter: 38000, fire: 520 },
+        unlock: { type: "ascensionNodeCount", value: 18 },
+        requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals", "salvageVats"],
+        requiredMapId: "map:abyssal-atlas",
+        requiredShip: "brig",
+        purchaseIntelCost: 0,
+        rewards: { matter: 82000, fire: 980, shards: 1, intel: 34 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.06, max: 0.08 },
+          yieldDelta: { min: -0.09, max: 0.12 },
+          speedMultiplier: { min: 0.9, max: 1.12 },
+          intelFlat: { min: 1, max: 4 }
+        },
+        routeChoices: [
+          {
+            id: "shielded",
+            name: "Shielded Conduits",
+            description: "Stabilize trench pressure at the cost of output.",
+            riskDelta: -0.14,
+            yieldDelta: -0.16,
+            speedMultiplier: 0.86,
+            intelFlat: 2,
+            encounterPool: "stability"
+          },
+          {
+            id: "balanced",
+            name: "Balanced Route",
+            description: "Maintain mixed pressure handling and salvage extraction.",
+            riskDelta: 0,
+            yieldDelta: 0,
+            speedMultiplier: 1,
+            intelFlat: 0,
+            encounterPool: "standard"
+          },
+          {
+            id: "overclocked",
+            name: "Overclocked Lanes",
+            description: "Run max thrust through unstable trench corridors.",
+            riskDelta: 0.16,
+            yieldDelta: 0.26,
+            speedMultiplier: 1.16,
+            intelFlat: 0,
+            encounterPool: "volatile"
+          },
+          {
+            id: "charted-descent",
+            name: "Charted Descent",
+            description: "Follow atlas markings to archived pressure vaults.",
+            requiredNodes: ["cartographerSpindle"],
+            riskDelta: -0.02,
+            yieldDelta: 0.14,
+            speedMultiplier: 1.06,
+            intelFlat: 4,
+            encounterPool: "charted"
+          },
+          {
+            id: "abyssal-hunt",
+            name: "Abyssal Hunt",
+            description: "Commit to deep trawl lanes for extreme salvage volume.",
+            requiredNodes: ["salvageVats"],
+            riskDelta: 0.1,
+            yieldDelta: 0.3,
+            speedMultiplier: 1.09,
+            intelFlat: 2,
+            encounterPool: "abyssal-hunt"
+          }
+        ],
+        encounters: [
+          {
+            id: "pressure-maw",
+            name: "Pressure Maw",
+            description: "A trench maw opens and distorts your haul corridor.",
+            difficulty: 0.6,
+            success: { yieldDelta: 0.2, intelFlat: 5 },
+            fail: { riskDelta: 0.12, matterPenalty: 3200, firePenalty: 90 }
+          },
+          {
+            id: "gravitic-spindle",
+            name: "Gravitic Spindle",
+            description: "A collapsed spindle can be spun up for efficient extraction.",
+            difficulty: 0.57,
+            success: { yieldDelta: 0.18, fireFlat: 70 },
+            fail: { riskDelta: 0.09, intelFlat: -2, firePenalty: 60 }
+          },
+          {
+            id: "drowned-archive",
+            name: "Drowned Archive",
+            description: "Ancient archive stacks may contain sovereign guidance sigils.",
+            difficulty: 0.62,
+            success: { yieldDelta: 0.22, intelFlat: 6 },
+            fail: { riskDelta: 0.14, matterPenalty: 3800 }
+          },
+          {
+            id: "trench-locust",
+            name: "Trench Locust Swarm",
+            description: "Reactive shard-locusts chew through rigging during harvest.",
+            difficulty: 0.6,
+            success: { yieldDelta: 0.2, intelFlat: 4 },
+            fail: { riskDelta: 0.11, yieldDelta: -0.13 }
+          }
+        ],
+        encounterPools: {
+          stability: ["gravitic-spindle"],
+          standard: ["pressure-maw", "gravitic-spindle"],
+          volatile: ["pressure-maw", "drowned-archive"],
+          charted: ["drowned-archive", "gravitic-spindle"],
+          "abyssal-hunt": ["trench-locust", "pressure-maw"]
+        }
+      },
+      {
+        id: "sunken-registry-run",
+        name: "Sunken Registry Armature",
+        description: "A command-tier campaign through registry cores and collapse fronts.",
+        durationSeconds: 230,
+        stageCount: 6,
+        risk: 0.54,
+        cost: { matter: 98000, fire: 1450 },
+        unlock: { type: "ascensionNodeCount", value: 26 },
+        requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals", "salvageVats"],
+        requiredMapId: "map:sunken-registry",
+        requiredShip: "galleon",
+        purchaseIntelCost: 0,
+        rewards: { matter: 210000, fire: 2600, shards: 2, intel: 62 },
+        stageVarianceRanges: {
+          riskDelta: { min: -0.07, max: 0.1 },
+          yieldDelta: { min: -0.11, max: 0.16 },
+          speedMultiplier: { min: 0.88, max: 1.14 },
+          intelFlat: { min: 2, max: 6 }
+        },
+        routeChoices: [
+          {
+            id: "shielded",
+            name: "Shielded Conduits",
+            description: "Fortify command channels for survivability.",
+            riskDelta: -0.16,
+            yieldDelta: -0.2,
+            speedMultiplier: 0.84,
+            intelFlat: 3,
+            encounterPool: "stability"
+          },
+          {
+            id: "balanced",
+            name: "Balanced Route",
+            description: "Standardized pacing through command and registry lanes.",
+            riskDelta: 0,
+            yieldDelta: 0,
+            speedMultiplier: 1,
+            intelFlat: 0,
+            encounterPool: "standard"
+          },
+          {
+            id: "overclocked",
+            name: "Overclocked Lanes",
+            description: "Force full extraction on unstable command arteries.",
+            riskDelta: 0.2,
+            yieldDelta: 0.34,
+            speedMultiplier: 1.18,
+            intelFlat: 0,
+            encounterPool: "volatile"
+          },
+          {
+            id: "command-lattice",
+            name: "Command Lattice",
+            description: "Leverage hazard seals to tap old command harmonics.",
+            requiredNodes: ["hazardSeals"],
+            riskDelta: 0.02,
+            yieldDelta: 0.2,
+            speedMultiplier: 1.05,
+            intelFlat: 5,
+            encounterPool: "command"
+          },
+          {
+            id: "registry-thread",
+            name: "Registry Thread",
+            description: "Thread salvage vats through registry indexing cores.",
+            requiredNodes: ["salvageVats"],
+            riskDelta: 0.04,
+            yieldDelta: 0.24,
+            speedMultiplier: 1.04,
+            intelFlat: 5,
+            encounterPool: "registry"
+          },
+          {
+            id: "cataclysm-breach",
+            name: "Cataclysm Breach",
+            description: "Breach collapse fronts for peak salvage at severe volatility.",
+            requiredNodes: ["hazardSeals", "salvageVats"],
+            riskDelta: 0.26,
+            yieldDelta: 0.42,
+            speedMultiplier: 1.12,
+            intelFlat: 2,
+            encounterPool: "cataclysm"
+          }
+        ],
+        encounters: [
+          {
+            id: "command-wardens",
+            name: "Command Wardens",
+            description: "Dormant sovereign wardens reactivate around your wake.",
+            difficulty: 0.66,
+            success: { yieldDelta: 0.24, intelFlat: 7 },
+            fail: { riskDelta: 0.16, matterPenalty: 7800, firePenalty: 180 }
+          },
+          {
+            id: "registry-lock",
+            name: "Registry Lock",
+            description: "A hard registry lock can expose rich command records.",
+            difficulty: 0.64,
+            success: { yieldDelta: 0.22, intelFlat: 8 },
+            fail: { riskDelta: 0.14, intelFlat: -3, firePenalty: 150 }
+          },
+          {
+            id: "collapse-fathom",
+            name: "Collapse Fathom",
+            description: "A collapse wave tears through the lane behind your hull.",
+            difficulty: 0.7,
+            success: { yieldDelta: 0.3, fireFlat: 160 },
+            fail: { riskDelta: 0.2, yieldDelta: -0.2, matterPenalty: 12000 }
+          },
+          {
+            id: "sovereign-aegis",
+            name: "Sovereign Aegis",
+            description: "A sealed aegis can be repurposed into extraction shielding.",
+            difficulty: 0.68,
+            success: { yieldDelta: 0.26, intelFlat: 9 },
+            fail: { riskDelta: 0.18, matterPenalty: 9000 }
+          },
+          {
+            id: "titan-remnant",
+            name: "Titan Remnant",
+            description: "A titan remnant stirs and destabilizes the entire grid.",
+            difficulty: 0.72,
+            success: { yieldDelta: 0.34, intelFlat: 8 },
+            fail: { riskDelta: 0.22, firePenalty: 220 }
+          }
+        ],
+        encounterPools: {
+          stability: ["registry-lock"],
+          standard: ["command-wardens", "registry-lock"],
+          volatile: ["collapse-fathom", "command-wardens"],
+          command: ["sovereign-aegis", "command-wardens"],
+          registry: ["registry-lock", "sovereign-aegis"],
+          cataclysm: ["titan-remnant", "collapse-fathom"]
+        }
       }
     ]
   },
@@ -755,7 +1601,7 @@ export const BALANCE = {
     fluxPistons: {
       id: "fluxPistons",
       name: "Flux Pistons",
-      description: "-0.15% generator cost growth",
+      description: "-0.1% generator cost growth",
       costResource: "matter",
       maxTier: 999,
       baseCost: 2600

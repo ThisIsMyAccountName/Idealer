@@ -1,6 +1,31 @@
 import { ascendCost, ascendShardGainFromResources, generatorCost } from "../engine/formulas.js";
 import { researchCost } from "../game/researchSystem.js";
 
+const VIEW_STATE_STORAGE_PREFIX = "dimensionalAlchemy.viewState";
+const VALID_MAIN_TABS = new Set(["upgrades", "research", "expeditions", "collection", "ascend"]);
+const VALID_EXPEDITION_VIEWS = new Set(["runs", "fleet", "ship"]);
+
+function formatIntOrFixed(value, digits = 2) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "0";
+  }
+  const factor = 10 ** digits;
+  const rounded = Math.round(numeric * factor) / factor;
+  if (Number.isInteger(rounded)) {
+    return String(rounded);
+  }
+  return rounded.toFixed(digits);
+}
+
+function formatPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "0%";
+  }
+  return `${formatIntOrFixed(numeric * 100)}%`;
+}
+
 function formatNumber(value) {
   if (!Number.isFinite(value)) {
     return "∞";
@@ -10,21 +35,18 @@ function formatNumber(value) {
   if (abs >= 1_000_000_000) {
     return rounded.toExponential(2).replace("e+", "e");
   }
-  if (rounded >= 1_000_000) {
-    return `${(rounded / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000_000) {
+    return `${formatIntOrFixed(rounded / 1_000_000)}M`;
   }
-  if (rounded >= 1_000) {
-    return `${(rounded / 1_000).toFixed(2)}K`;
+  if (abs >= 1_000) {
+    return `${formatIntOrFixed(rounded / 1_000)}K`;
   }
-  return rounded.toFixed(2);
+  return formatIntOrFixed(rounded);
 }
 
 function formatScaledNumber(value, scale) {
   const scaled = value * scale;
-  if (Number.isInteger(scaled)) {
-    return String(scaled);
-  }
-  return scaled.toFixed(2).replace(/\.00$/, "");
+  return formatIntOrFixed(scaled);
 }
 
 function scaleDescription(text, scale) {
@@ -47,22 +69,172 @@ function formatDuration(totalSeconds) {
   return `${minutes}:${String(rem).padStart(2, "0")}`;
 }
 
+function formatInt(value) {
+  return Math.max(0, Math.floor(Number(value) || 0)).toLocaleString("en-US");
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function toTitleToken(value) {
+  return String(value || "")
+    .trim()
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function buildViewStateStorageKey(activeSlotId = "default") {
+  const normalizedSlot = typeof activeSlotId === "string" && activeSlotId.trim()
+    ? activeSlotId.trim()
+    : "default";
+  return `${VIEW_STATE_STORAGE_PREFIX}:${normalizedSlot}`;
+}
+
+function loadViewState(storageKey) {
+  const defaults = {
+    activeTab: "upgrades",
+    expeditionsView: "runs"
+  };
+  if (typeof window === "undefined" || !window.localStorage) {
+    return defaults;
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return defaults;
+    }
+    const parsed = JSON.parse(raw);
+    const activeTab = VALID_MAIN_TABS.has(parsed?.activeTab) ? parsed.activeTab : defaults.activeTab;
+    const expeditionsView = VALID_EXPEDITION_VIEWS.has(parsed?.expeditionsView)
+      ? parsed.expeditionsView
+      : defaults.expeditionsView;
+    return {
+      activeTab,
+      expeditionsView
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function persistViewState(storageKey, viewState) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(viewState));
+  } catch {
+    // Ignore storage failures in restrictive browser modes.
+  }
+}
+
+const COLLECTION_EFFECT_META = {
+  matterRateMultiplier: { label: "Matter production", mode: "multiplier", order: 10 },
+  fireRateMultiplier: { label: "Fire production", mode: "multiplier", order: 11 },
+  productionMultiplier: { label: "All production", mode: "multiplier", order: 12 },
+  prestigeGainMultiplier: { label: "Shard gain", mode: "multiplier", order: 20 },
+  expeditionYieldMultiplier: { label: "Expedition yield", mode: "multiplier", order: 30 },
+  expeditionSpeedMultiplier: { label: "Expedition speed", mode: "multiplier", order: 31 },
+  expeditionIntelMultiplier: { label: "Expedition intel gain", mode: "multiplier", order: 32 },
+  expeditionRiskMitigation: { label: "Expedition risk mitigation", mode: "percent", order: 33 },
+  expeditionShardBonus: { label: "Expedition shard bonus", mode: "percent", order: 34 },
+  rewardsChestCapacityBonus: { label: "Rewards chest capacity", mode: "integer", order: 40 },
+  partTierCapBonus: { label: "Part tier cap", mode: "integer", order: 41 },
+  facilityMaxLevelBonus: { label: "Facility max level", mode: "integer", order: 42 }
+};
+
+function formatSignedPercent(value) {
+  const magnitude = Math.abs(value * 100);
+  return `${value >= 0 ? "+" : "-"}${formatIntOrFixed(magnitude)}%`;
+}
+
+function formatSignedFlat(value) {
+  const magnitude = Math.abs(value);
+  return `${value >= 0 ? "+" : "-"}${formatIntOrFixed(magnitude)}`;
+}
+
+function toCollectionEffectDelta(effectKey, rawValue) {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  const mode = COLLECTION_EFFECT_META[effectKey]?.mode;
+  if (mode === "multiplier" || (!mode && String(effectKey).endsWith("Multiplier"))) {
+    return numeric - 1;
+  }
+  return numeric;
+}
+
+function formatCollectionEffectLabel(effectKey, totalDelta) {
+  if (!Number.isFinite(totalDelta) || Math.abs(totalDelta) < 1e-9) {
+    return "";
+  }
+  const meta = COLLECTION_EFFECT_META[effectKey] || {};
+  const label = meta.label || toTitleToken(effectKey);
+  const mode = meta.mode || (String(effectKey).endsWith("Multiplier") ? "multiplier" : "flat");
+  if (mode === "multiplier" || mode === "percent") {
+    return `${formatSignedPercent(totalDelta)} ${label}`;
+  }
+  if (mode === "integer") {
+    const rounded = Math.round(totalDelta);
+    if (rounded === 0) {
+      return "";
+    }
+    return `${rounded >= 0 ? "+" : "-"}${Math.abs(rounded).toLocaleString("en-US")} ${label}`;
+  }
+  return `${formatSignedFlat(totalDelta)} ${label}`;
+}
+
+function getClaimedCollectionEffectSummary(milestones) {
+  const totals = {};
+  (Array.isArray(milestones) ? milestones : []).forEach((milestone) => {
+    if (!milestone?.claimed) {
+      return;
+    }
+    const effect = milestone.effect && typeof milestone.effect === "object" ? milestone.effect : {};
+    Object.entries(effect).forEach(([effectKey, effectValue]) => {
+      const delta = toCollectionEffectDelta(effectKey, effectValue);
+      if (!Number.isFinite(delta) || Math.abs(delta) < 1e-9) {
+        return;
+      }
+      totals[effectKey] = (totals[effectKey] || 0) + delta;
+    });
+  });
+
+  return Object.entries(totals)
+    .sort((left, right) => {
+      const leftMeta = COLLECTION_EFFECT_META[left[0]] || {};
+      const rightMeta = COLLECTION_EFFECT_META[right[0]] || {};
+      const orderDelta = (leftMeta.order || 999) - (rightMeta.order || 999);
+      if (orderDelta !== 0) {
+        return orderDelta;
+      }
+      const leftLabel = leftMeta.label || toTitleToken(left[0]);
+      const rightLabel = rightMeta.label || toTitleToken(right[0]);
+      return leftLabel.localeCompare(rightLabel);
+    })
+    .map(([effectKey, totalDelta]) => formatCollectionEffectLabel(effectKey, totalDelta))
+    .filter(Boolean);
+}
+
 export function createRenderer({ appEl, state, balance, generatorDefs, formulas, systems, saveSlots, debugOptions = {} }) {
+  const viewStateStorageKey = buildViewStateStorageKey(saveSlots?.activeSlotId);
+  const persistedViewState = loadViewState(viewStateStorageKey);
+
   const ui = {
     notice: "",
     good: false,
-    activeTab: "upgrades",
+    activeTab: persistedViewState.activeTab,
     debugPanelVisible: false,
     lastDebugRefreshAt: 0,
     isBound: false,
     panelEl: null,
     pinnedEl: null,
     ascendView: null,
-    expeditionsView: "runs",
+    expeditionsView: persistedViewState.expeditionsView,
     fleetFocusSlot: "hull",
     draggingPartId: "",
     dragHoverSlot: "",
@@ -70,20 +242,107 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     dragSourceSlot: "",
     dragSourceShipId: "",
     dragDropHandled: false,
-    chestClaimPopup: null,
+    rareDropPopups: [],
+    rareDropPopupId: 0,
+    rareDropTableState: {},
     lastExpeditionSignature: "",
     scrollPositions: {
       upgrades: 0,
       research: 0,
-      expeditions: 0
+      expeditions: 0,
+      collection: 0
     }
   };
 
   const refs = {};
 
+  function persistCurrentViewState() {
+    persistViewState(viewStateStorageKey, {
+      activeTab: ui.activeTab,
+      expeditionsView: ui.expeditionsView
+    });
+  }
+
+  function snapshotRareDropTableState() {
+    if (!ui.panelEl) {
+      return;
+    }
+    ui.panelEl
+      .querySelectorAll("details.expedition-loot-table[data-loot-table-key]")
+      .forEach((detailsEl) => {
+        const key = detailsEl.dataset.lootTableKey;
+        if (!key) {
+          return;
+        }
+        ui.rareDropTableState[key] = detailsEl.open;
+      });
+  }
+
   function setNotice(text, good = false) {
     ui.notice = text;
     ui.good = good;
+  }
+
+  function dismissRareDropPopup(popupId) {
+    ui.rareDropPopups = ui.rareDropPopups.filter((popup) => popup.id !== popupId);
+    renderRareDropPopups();
+  }
+
+  function renderRareDropPopups() {
+    if (!refs.rarePopupStack) {
+      return;
+    }
+    const now = Date.now();
+    ui.rareDropPopups = ui.rareDropPopups.filter((popup) => popup.expiresAt > now);
+    if (ui.rareDropPopups.length === 0) {
+      refs.rarePopupStack.innerHTML = "";
+      refs.rarePopupStack.classList.add("hidden");
+      return;
+    }
+
+    refs.rarePopupStack.classList.remove("hidden");
+    refs.rarePopupStack.innerHTML = ui.rareDropPopups
+      .map((popup) => {
+        const items = popup.items
+          .map((item) => `<div class="rare-popup-item"><span class="rare-popup-rarity">${item.rarity}</span><span>${item.name}</span></div>`)
+          .join("");
+        const overflow = popup.overflowCount > 0
+          ? `<div class="rare-popup-more">+${popup.overflowCount} more rare drop${popup.overflowCount === 1 ? "" : "s"}</div>`
+          : "";
+        return `
+          <article class="rare-popup" data-popup-id="${popup.id}">
+            <button class="rare-popup-close" data-action="rare-popup:dismiss:${popup.id}" aria-label="Dismiss rare drop popup">x</button>
+            <div class="rare-popup-title">Rare Drops Claimed</div>
+            ${items}
+            ${overflow}
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function showRareDropPopup(drops) {
+    const rareDrops = (Array.isArray(drops) ? drops : [])
+      .filter((drop) => drop && drop.id)
+      .filter((drop) => ["semi-rare", "rare", "epic", "legendary"].includes(String(drop.rarity || "").toLowerCase()));
+    if (rareDrops.length === 0) {
+      return;
+    }
+
+    const popupItems = rareDrops.slice(0, 3).map((drop) => ({
+      name: String(drop.name || drop.id),
+      rarity: toTitleToken(drop.rarity || "rare")
+    }));
+
+    ui.rareDropPopupId += 1;
+    ui.rareDropPopups.unshift({
+      id: ui.rareDropPopupId,
+      items: popupItems,
+      overflowCount: Math.max(0, rareDrops.length - popupItems.length),
+      expiresAt: Date.now() + 7000
+    });
+    ui.rareDropPopups = ui.rareDropPopups.slice(0, 3);
+    renderRareDropPopups();
   }
 
   function actionButton(label, className, action, disabled = false) {
@@ -110,7 +369,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
   function formatPartEffects(effects) {
     return Object.entries(effects || {})
-      .map(([key, value]) => `${key} ${value >= 0 ? "+" : ""}${(Number(value) * 100).toFixed(1)}%`)
+      .map(([key, value]) => `${key} ${value >= 0 ? "+" : ""}${formatPercent(Number(value) || 0)}`)
       .join(" | ");
   }
 
@@ -123,28 +382,74 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     return scaled;
   }
 
-  function summarizeDropNames(drops) {
-    if (!Array.isArray(drops) || drops.length === 0) {
-      return [];
+  function getBandRareDrops(bandId) {
+    const table = balance?.expeditions?.rareBlueprintDrops || {};
+    const drops = table?.[bandId];
+    return Array.isArray(drops) ? drops : [];
+  }
+
+  function getRareDropTypeLabel(drop) {
+    const voyageMaps = balance?.expeditions?.voyageMaps || {};
+    if (drop?.id && voyageMaps[drop.id]) {
+      const unlockBandId = typeof voyageMaps[drop.id]?.unlocksBandId === "string"
+        ? voyageMaps[drop.id].unlocksBandId
+        : "";
+      return unlockBandId ? `Map (${toTitleToken(unlockBandId)})` : "Map";
+    }
+    if (drop?.blueprintForShip) {
+      return `Blueprint (${String(drop.blueprintForShip).toUpperCase()})`;
+    }
+    if (drop?.shipId && drop?.slot) {
+      return `Part (${String(drop.shipId).toUpperCase()} ${String(drop.slot).toUpperCase()})`;
+    }
+    if (drop?.shipId) {
+      return `Part (${String(drop.shipId).toUpperCase()})`;
+    }
+    return "Rare";
+  }
+
+  function renderBandRareDropTable(bandId, title = "Loot Table", tableKey = "") {
+    const resolvedTableKey = typeof tableKey === "string" && tableKey.trim()
+      ? tableKey.trim()
+      : String(bandId || "unknown");
+    const openAttr = ui.rareDropTableState[resolvedTableKey] ? " open" : "";
+    const drops = getBandRareDrops(bandId);
+    if (drops.length === 0) {
+      return `
+        <details class="expedition-loot-table" data-loot-table-key="${resolvedTableKey}"${openAttr}>
+          <summary>${title}</summary>
+          <div class="kv">No rare drops configured.</div>
+        </details>
+      `;
     }
 
-    const entries = [];
-    const byNameKey = new Map();
-    drops.forEach((drop) => {
-      const nameFromDrop = typeof drop?.name === "string" ? drop.name.trim() : "";
-      const nameFromId = typeof drop?.id === "string" ? drop.id.trim() : "";
-      const displayName = nameFromDrop || nameFromId || "Unknown Drop";
-      const normalizedKey = displayName.toLowerCase();
-      if (byNameKey.has(normalizedKey)) {
-        byNameKey.get(normalizedKey).count += 1;
-        return;
-      }
-      const entry = { name: displayName, count: 1 };
-      byNameKey.set(normalizedKey, entry);
-      entries.push(entry);
-    });
+    const rows = [...drops]
+      .sort((left, right) => (Number(right?.chance) || 0) - (Number(left?.chance) || 0))
+      .map((drop) => {
+        const dropName = typeof drop?.name === "string" && drop.name.trim() ? drop.name.trim() : (drop?.id || "Unknown Drop");
+        const dropRate = formatPercent(Number(drop?.chance) || 0);
+        const dropType = getRareDropTypeLabel(drop);
+        return `
+          <div class="expedition-loot-row">
+            <span class="expedition-loot-name">${dropName}</span>
+            <span class="expedition-loot-type">${dropType}</span>
+            <span class="expedition-loot-rate">${dropRate}</span>
+          </div>
+        `;
+      })
+      .join("");
 
-    return entries.map((entry) => (entry.count > 1 ? `${entry.name} x${entry.count}` : entry.name));
+    return `
+      <details class="expedition-loot-table" data-loot-table-key="${resolvedTableKey}"${openAttr}>
+        <summary>${title}</summary>
+        <div class="expedition-loot-header">
+          <span>Drop</span>
+          <span>Type</span>
+          <span>Rate</span>
+        </div>
+        <div class="expedition-loot-rows">${rows}</div>
+      </details>
+    `;
   }
 
   function isTelemetryEnabled() {
@@ -217,7 +522,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       </div>
       <div class="row">
         <div class="kv">Multipliers</div>
-        <div class="kv" data-debug-multipliers>prod x1.000 | matter x1.000 | fire x1.000 | growth x1.000</div>
+        <div class="kv" data-debug-multipliers>prod x1 | matter x1 | fire x1 | growth x1</div>
       </div>
       <div class="row">
         <div class="kv">Next Upgrade</div>
@@ -255,7 +560,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     const rates = formulas.productionPerSecond(state, generatorDefs);
     refs.debugRates.textContent = `${formatNumber(rates.matter)}/s Matter | ${formatNumber(rates.fire)}/s Fire`;
-    refs.debugMultipliers.textContent = `prod x${state.perks.productionMultiplier.toFixed(3)} | matter x${state.perks.matterRateMultiplier.toFixed(3)} | fire x${state.perks.fireRateMultiplier.toFixed(3)} | growth x${state.perks.generatorCostGrowthMultiplier.toFixed(3)}`;
+    refs.debugMultipliers.textContent = `prod x${formatIntOrFixed(state.perks.productionMultiplier)} | matter x${formatIntOrFixed(state.perks.matterRateMultiplier)} | fire x${formatIntOrFixed(state.perks.fireRateMultiplier)} | growth x${formatIntOrFixed(state.perks.generatorCostGrowthMultiplier)}`;
     refs.debugNextUpgrade.textContent = getNextUpgradeText();
 
     Object.values(generatorDefs).forEach((def) => {
@@ -344,15 +649,6 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div class="hint" id="convert-yield">100M -> 1F</div>
             <div class="action">${actionButton("Convert", "secondary", "convert")}</div>
           </div>
-          <div class="resource-card resource-card--ascend" data-resource="shards">
-            <div class="card-title">
-              <span class="card-icon" aria-hidden="true">SHD</span>
-              <div class="label">Shards</div>
-            </div>
-            <div class="value" id="shards-value">0</div>
-            <div class="hint" id="ascend-gain">0M + 0F -> +0S</div>
-            <div class="action">${actionButton("Ascend", "ghost", "ascend")}</div>
-          </div>
           <div class="resource-card resource-card--intel ${expeditionUnlocked ? "" : "is-locked"}" data-resource="intel" id="intel-card">
             <div class="card-title">
               <span class="card-icon" aria-hidden="true">EXP</span>
@@ -362,6 +658,15 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div class="hint" id="intel-hint">${expeditionUnlocked ? "Runs and ship upgrades" : "Unlock Expedition Keystone"}</div>
             <div class="action"><button class="secondary" data-action="tab:expeditions" id="intel-open" ${expeditionUnlocked ? "" : "disabled"}>Expeditions</button></div>
           </div>
+          <div class="resource-card resource-card--ascend" data-resource="shards">
+            <div class="card-title">
+              <span class="card-icon" aria-hidden="true">SHD</span>
+              <div class="label">Shards</div>
+            </div>
+            <div class="value" id="shards-value">0</div>
+            <div class="hint" id="ascend-gain">0M + 0F -> +0S</div>
+            <div class="action">${actionButton("Ascend", "ghost", "ascend")}</div>
+          </div>
         </div>
       </section>
 
@@ -369,6 +674,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         ${actionButton("Upgrades", "ghost tab", "tab:upgrades")}
         ${actionButton("Research", "ghost tab", "tab:research")}
         ${actionButton("Expeditions", "ghost tab", "tab:expeditions", !expeditionUnlocked)}
+        ${actionButton("Collection", "ghost tab", "tab:collection")}
         ${actionButton("Ascend", "ghost tab", "tab:ascend")}
       </section>
 
@@ -377,6 +683,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
         <article class="panel" id="dynamic-panel"></article>
       </section>
+
+      <section class="rare-popup-stack hidden" id="rare-popup-stack" aria-live="polite" aria-atomic="false"></section>
 
       <section class="panel debug-panel hidden" id="debug-panel"></section>
     `;
@@ -390,6 +698,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.intelAction = appEl.querySelector("#intel-open");
     refs.expeditionsTab = appEl.querySelector('button[data-action="tab:expeditions"]');
     refs.mainGrid = appEl.querySelector("#main-grid");
+    refs.rarePopupStack = appEl.querySelector("#rare-popup-stack");
     ui.pinnedEl = appEl.querySelector("#pinned-panel");
     refs.saveSlot = appEl.querySelector("#save-slot");
     refs.saveReset = appEl.querySelector("[data-action='save-reset']");
@@ -421,8 +730,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       .map((def) => {
         const level = state.generators[def.id] || 0;
         const cost = generatorCost(def, level, state.perks.generatorCostGrowthMultiplier);
-        const resourceMultiplier = def.resource === "matter" ? state.perks.matterRateMultiplier : state.perks.fireRateMultiplier;
-        const effectiveRate = def.baseRate * state.perks.productionMultiplier * resourceMultiplier;
+        const effectiveRate = getGeneratorIncrementRate(def);
 
         return `
           <div class="row">
@@ -440,7 +748,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       <h2>Generators</h2>
       <div class="row row--overview-output">
         <div class="muted">Output</div>
-        <div class="kv"><span id="prod-inline">x${state.perks.productionMultiplier.toFixed(2)}</span> mult | <span id="rate-value">${rateLine}</span></div>
+        <div class="kv"><span id="prod-inline">x${formatIntOrFixed(state.perks.productionMultiplier)}</span> mult | <span id="rate-value">${rateLine}</span></div>
       </div>
       ${generatorRows}
       <div class="row">
@@ -571,6 +879,128 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     `;
   }
 
+  function renderCollectionPanel() {
+    const collectionStatus = systems.expeditions.getCollectionStatus?.() || {
+      sources: [],
+      milestones: [],
+      totalTrackable: 0,
+      trackableDiscovered: 0,
+      uniqueDiscoveredTotal: 0,
+      completionFraction: 0
+    };
+    const totalTrackable = Math.max(0, Number(collectionStatus.totalTrackable) || 0);
+    const trackableDiscovered = Math.max(0, Number(collectionStatus.trackableDiscovered) || 0);
+    const uniqueDiscoveredTotal = Math.max(0, Number(collectionStatus.uniqueDiscoveredTotal) || 0);
+    const completionPercent = clamp((Number(collectionStatus.completionFraction) || 0) * 100, 0, 100);
+    const expeditionUnlocked = isExpeditionUnlocked();
+    const claimedEffectSummary = getClaimedCollectionEffectSummary(collectionStatus.milestones || []);
+    const claimedEffectsMarkup = claimedEffectSummary.length > 0
+      ? `<div class="chip-row collection-claimed-effects-list">${claimedEffectSummary
+        .map((effectLabel) => `<span class="chip collection-effect-chip">${effectLabel}</span>`)
+        .join("")}</div>`
+      : "<div class=\"kv collection-claimed-effects-empty\">No milestone rewards claimed yet.</div>";
+
+    const milestoneCards = (collectionStatus.milestones || [])
+      .filter((milestone) => !milestone.claimed)
+      .map((milestone) => {
+        const ready = Boolean(milestone.ready);
+        const classNames = ["collection-milestone"];
+        if (ready) {
+          classNames.push("is-ready");
+        }
+        const remaining = Math.max(0, Number(milestone.remaining) || 0);
+        const buttonLabel = ready
+          ? "Claim"
+          : `${formatInt(remaining)} left`;
+        return `
+          <article class="${classNames.join(" ")}">
+            <div class="collection-milestone-main">
+              <div class="collection-milestone-name">
+                <strong>${milestone.name}</strong>
+                <span class="collection-milestone-desc">${milestone.description || "Collection milestone reward."}</span>
+              </div>
+            </div>
+            ${actionButton(
+              buttonLabel,
+              ready ? "secondary compact" : "ghost compact",
+              `collection:claim:${milestone.id}`,
+              !ready
+            )}
+          </article>
+        `;
+      })
+      .join("");
+
+    const sourceSections = (collectionStatus.sources || [])
+      .map((source) => {
+        const sourceTotal = Math.max(0, Number(source.totalItems) || 0);
+        const sourceDiscovered = Math.max(0, Number(source.discoveredCount) || 0);
+        const sourcePercent = sourceTotal > 0 ? clamp((sourceDiscovered / sourceTotal) * 100, 0, 100) : 0;
+        const items = (source.items || [])
+          .map((item, index) => {
+            const discovered = Boolean(item.discovered);
+            const rarityToken = discovered
+              ? toTitleToken(item.discoveredRarity || item.rarity || "rare")
+              : "Unknown";
+            const nameToken = discovered
+              ? (item.discoveredName || item.name || item.id)
+              : `Unknown Relic #${index + 1}`;
+            const classNames = ["collection-item"];
+            if (discovered) {
+              classNames.push("is-discovered");
+            } else {
+              classNames.push("is-hidden");
+            }
+            return `
+              <div class="${classNames.join(" ")}">
+                <div class="collection-item-main">
+                  <div class="collection-item-name">${nameToken}</div>
+                  <div class="chip-row">
+                    <span class="chip chip--rarity">${rarityToken}</span>
+                    ${item.bandId ? `<span class="chip">${item.bandId}</span>` : ""}
+                  </div>
+                </div>
+                <div class="collection-item-state">${discovered ? "Found" : "Hidden"}</div>
+              </div>
+            `;
+          })
+          .join("");
+
+        return `
+          <section class="collection-source">
+            <div class="collection-source-head">
+              <h3>${source.name}</h3>
+              <div class="kv">${formatInt(sourceDiscovered)}/${formatInt(sourceTotal)} found</div>
+            </div>
+            ${source.description ? `<div class="kv">${source.description}</div>` : ""}
+            <div class="collection-progress collection-progress--source"><span style="width:${sourcePercent.toFixed(1)}%"></span></div>
+            <div class="collection-item-list">
+              ${items || "<div class=\"kv\">No catalog entries yet.</div>"}
+            </div>
+          </section>
+        `;
+      })
+      .join("");
+
+    return `
+      <h2>Collection</h2>
+      <div class="collection-summary">
+        <div class="collection-summary-title">Rare Finds Logged</div>
+        <div class="kv">${formatInt(trackableDiscovered)}/${formatInt(totalTrackable)} catalog entries | ${formatInt(uniqueDiscoveredTotal)} unique discoveries</div>
+        <div class="collection-progress"><span style="width:${completionPercent.toFixed(1)}%"></span></div>
+      </div>
+      ${expeditionUnlocked ? "" : "<div class=\"kv\">Unlock Expedition Keystone to begin collecting expedition relics.</div>"}
+      <h3>Milestones</h3>
+      <div class="collection-claimed-effects">
+        <div class="collection-claimed-effects-title">Reward effects claimed so far</div>
+        ${claimedEffectsMarkup}
+      </div>
+      <div class="collection-milestone-grid">${milestoneCards || "<div class=\"kv\">All milestones claimed.</div>"}</div>
+      <h3>Catalog</h3>
+      <div class="scroll-panel collection-scroll">${sourceSections || "<div class=\"kv\">No collection sources configured.</div>"}</div>
+    `;
+  }
+
   function renderAscendPanel() {
     const nodeWidth = 140;
     const nodeHeight = 140;
@@ -667,13 +1097,11 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const zoneStyle = getZoneStyleForShip(selectedShipDef, slot);
         const equippedRefValue = equippedRef?.ref || "";
         const draggableAttr = equippedRefValue ? 'draggable="true"' : "";
-        const dragHint = equippedRefValue ? "<span class=\"ship-zone-drag-hint\">Drag off ship to unequip</span>" : "";
         return `
           <button class="ship-zone${active}" data-action="ship:focus:${slot}" data-slot="${slot}" data-ship-id="${selectedShipId}" data-equipped-ref="${equippedRefValue}" ${zoneStyle} ${draggableAttr}>
             <strong>${label}</strong>
             <span>${equippedName}</span>
             <span class="ship-zone-meta">${effectsText || "No stat modifiers."}</span>
-            ${dragHint}
           </button>
         `;
       })
@@ -699,11 +1127,28 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     `;
   }
 
+  function formatShipStatSummary(shipStats) {
+    if (!shipStats) {
+      return "";
+    }
+    const riskMitigation = Number(shipStats.riskMitigation) || 0;
+    const riskPrefix = riskMitigation >= 0 ? "+" : "";
+    return ` | Speed x${formatIntOrFixed(shipStats.speedMultiplier || 1)} | Risk Mit ${riskPrefix}${formatPercent(riskMitigation)} | Yield x${formatIntOrFixed(shipStats.yieldMultiplier || 1)} | Rare x${formatIntOrFixed(shipStats.rareDropWeight || 1)}`;
+  }
+
   function renderFleetDockPanel() {
+    const expeditionStatus = systems.expeditions.getStatus();
     const shipStatus = systems.ships.getStatus();
     const shipDefs = shipStatus.shipDefs || {};
     const ships = shipStatus.ships || {};
     const facilityDefs = shipStatus.facilityDefs || {};
+    const activeRun = expeditionStatus.activeRun;
+    const activeBand = activeRun
+      ? (expeditionStatus.bands || []).find((band) => band.id === activeRun.bandId)
+      : null;
+    const lockedShipId = typeof activeBand?.requiredShip === "string" ? activeBand.requiredShip : "";
+    const shipSwitchLocked = Boolean(activeRun && lockedShipId);
+    const lockedShipName = shipDefs[lockedShipId]?.name || toTitleToken(lockedShipId);
 
     const selectedShipId = shipStatus.selectedShip;
     const selectedShipState = ships[selectedShipId] || {};
@@ -725,16 +1170,18 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         }
         const action = acquired ? `ship:select:${def.id}` : `ship:buy:${def.id}`;
         const actionText = acquired ? (selected ? "Selected" : "Select") : "Buy";
-        const disabled = acquired ? selected : !unlock.ok;
+        const lockedByVoyage = shipSwitchLocked && def.id !== lockedShipId;
+        const disabled = (acquired ? selected : !unlock.ok) || lockedByVoyage;
 
         return `
           <div class="ship-card-wrap">
             <div class="${classNames.join(" ")}">
               <div><strong>${def.name}</strong></div>
-              <div class="kv">Base: Speed x${(def.baseStats?.speedMultiplier || 1).toFixed(2)} | Risk Mit +${((def.baseStats?.riskMitigation || 0) * 100).toFixed(1)}%</div>
-              <div class="kv">Yield x${(def.baseStats?.yieldMultiplier || 1).toFixed(2)} | Rare x${(def.baseStats?.rareDropWeight || 1).toFixed(2)}</div>
+              <div class="kv">Base: Speed x${formatIntOrFixed(def.baseStats?.speedMultiplier || 1)} | Risk Mit ${Number(def.baseStats?.riskMitigation || 0) >= 0 ? "+" : ""}${formatPercent(def.baseStats?.riskMitigation || 0)}</div>
+              <div class="kv">Yield x${formatIntOrFixed(def.baseStats?.yieldMultiplier || 1)} | Rare x${formatIntOrFixed(def.baseStats?.rareDropWeight || 1)}</div>
               ${acquired ? "<div class=\"kv\">Owned</div>" : `<div class="kv">Cost: ${formatCost(def.purchaseCost)}</div>`}
               ${!acquired && !unlock.ok ? `<div class="kv">${unlock.reason}</div>` : ""}
+              ${lockedByVoyage ? `<div class="kv">Locked during active voyage. ${lockedShipName} required.</div>` : ""}
               ${actionButton(actionText, acquired ? "ghost" : "secondary", action, disabled)}
             </div>
           </div>
@@ -744,26 +1191,27 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     const facilityRows = Object.entries(facilityDefs)
       .map(([facilityId, def]) => {
+        const shipFacility = systems.ships.getFacilitySpec?.(selectedShipId, facilityId) || def;
         const level = Math.max(0, Math.floor(Number(selectedShipState.facilities?.[facilityId]) || 0));
-        const maxLevel = def.maxLevel || 0;
+        const maxLevel = shipFacility.maxLevel || 0;
         const maxed = level >= maxLevel;
-        const nextCost = def.levelCosts?.[level];
+        const nextCost = systems.ships.getFacilityUpgradeCost?.(selectedShipId, facilityId, level) || null;
         const disabled = maxed || !selectedShipState.acquired;
         const effectParts = [];
-        if (def.effectsPerLevel?.speedMultiplier) {
-          effectParts.push(`+${(def.effectsPerLevel.speedMultiplier * 100).toFixed(1)}% speed/lv`);
+        if (shipFacility.effectsPerLevel?.speedMultiplier) {
+          effectParts.push(`${formatSignedPercent(shipFacility.effectsPerLevel.speedMultiplier)} speed/lv`);
         }
-        if (def.effectsPerLevel?.yieldMultiplier) {
-          effectParts.push(`+${(def.effectsPerLevel.yieldMultiplier * 100).toFixed(1)}% yield/lv`);
+        if (shipFacility.effectsPerLevel?.yieldMultiplier) {
+          effectParts.push(`${formatSignedPercent(shipFacility.effectsPerLevel.yieldMultiplier)} yield/lv`);
         }
-        if (def.effectsPerLevel?.riskMitigation) {
-          effectParts.push(`+${(def.effectsPerLevel.riskMitigation * 100).toFixed(1)}% risk mit/lv`);
+        if (shipFacility.effectsPerLevel?.riskMitigation) {
+          effectParts.push(`${formatSignedPercent(shipFacility.effectsPerLevel.riskMitigation)} risk mit/lv`);
         }
-        if (def.effectsPerLevel?.penaltyDampening) {
-          effectParts.push(`+${(def.effectsPerLevel.penaltyDampening * 100).toFixed(1)}% penalty damp/lv`);
+        if (shipFacility.effectsPerLevel?.penaltyDampening) {
+          effectParts.push(`${formatSignedPercent(shipFacility.effectsPerLevel.penaltyDampening)} penalty damp/lv`);
         }
-        if (def.effectsPerLevel?.rareDropWeight) {
-          effectParts.push(`+${(def.effectsPerLevel.rareDropWeight * 100).toFixed(1)}% rare weight/lv`);
+        if (shipFacility.effectsPerLevel?.rareDropWeight) {
+          effectParts.push(`${formatSignedPercent(shipFacility.effectsPerLevel.rareDropWeight)} rare weight/lv`);
         }
 
         return `
@@ -771,7 +1219,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
             <div>
               <div><strong>${def.label}</strong> Lv.${level}/${maxLevel}</div>
               <div class="kv">${effectParts.join(" | ")}</div>
-              <div class="kv">${maxed ? "Maxed" : `Next cost: ${formatCost(nextCost)}`}</div>
+              <div class="kv">${maxed ? "Maxed" : formatCost(nextCost)}</div>
             </div>
             ${actionButton("Upgrade", "ghost", `ship:upgrade:${selectedShipId}:${facilityId}`, disabled)}
           </div>
@@ -788,7 +1236,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       <div class="fleet-layout">
         <section class="fleet-left">
           <div class="ship-cards">${shipCards}</div>
-          <div class="kv">Selected: <strong>${selectedShipDef.name || selectedShipId}</strong>${selectedShipStats ? ` | Speed x${selectedShipStats.speedMultiplier.toFixed(2)} | Risk Mit +${(selectedShipStats.riskMitigation * 100).toFixed(1)}% | Yield x${selectedShipStats.yieldMultiplier.toFixed(2)} | Rare x${selectedShipStats.rareDropWeight.toFixed(2)}` : ""}</div>
+          <div class="kv">Selected: <strong>${selectedShipDef.name || selectedShipId}</strong>${formatShipStatSummary(selectedShipStats)}</div>
+          ${shipSwitchLocked ? `<div class="kv">Ship switching is locked while ${lockedShipName} voyage is active.</div>` : ""}
           <div class="kv">Use the Ships subtab for interactive slot management and part inventory.</div>
         </section>
         <section class="fleet-right">
@@ -842,9 +1291,12 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           compatibleWithFocusSlot: def.slot === selectedSlot
         };
       })
-      .filter((item) => item && item.compatibleWithSelectedShip)
+      .filter(Boolean)
       .sort((a, b) => {
         const rarityWeight = { "semi-rare": 1, rare: 2, epic: 3 };
+        if (a.compatibleWithSelectedShip !== b.compatibleWithSelectedShip) {
+          return a.compatibleWithSelectedShip ? -1 : 1;
+        }
         if (a.def.slot !== b.def.slot) {
           return String(a.def.slot).localeCompare(String(b.def.slot));
         }
@@ -874,9 +1326,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const canEquip = canEquipByCount && canEquipByFilter;
         const canCombine = Boolean(item.combineInfo?.ok);
         const combineLabel = canCombine ? `Fuse -> T${item.combineInfo.nextTier}` : "Fuse";
-        const combineHint = canCombine
+        const combineHintRaw = canCombine
           ? `Consumes 2x T${item.tier}, creates 1x T${item.combineInfo.nextTier}.`
           : (item.combineInfo?.reason || "Cannot fuse now.");
+        const combineHint = combineHintRaw === "Need 2 unequipped copies of this part tier." ? "" : combineHintRaw;
         const equippedBadge = item.equippedCount > 0 ? `<span class="chip">Equipped ${item.equippedCount}</span>` : "";
         const shipBadge = item.def.shipId ? `<span class="chip chip--ship">${item.def.shipId}</span>` : "";
         return `
@@ -885,7 +1338,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
               <div><strong>${item.def.name} T${item.tier}</strong> x${item.count} <span class="kv">(${item.availableCount} free)</span></div>
               <div class="chip-row"><span class="chip chip--rarity">${rarity}</span><span class="chip chip--tier">T${item.tier}</span><span class="chip">${item.def.slot}</span>${shipBadge}${equippedBadge}</div>
               <div class="kv">${effectText || "No stat modifiers."}</div>
-              <div class="kv">${combineHint}</div>
+              ${combineHint ? `<div class="kv">${combineHint}</div>` : ""}
             </div>
             <div class="inventory-item-actions">
               ${actionButton("Equip", "secondary compact", `ship:equip:${selectedShipId}:${item.def.slot}:${encoded}`, !canEquip)}
@@ -894,15 +1347,14 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           </div>
         `;
       }).join("")
-      : "<div class=\"kv\">No compatible parts available for this ship yet.</div>";
+      : "<div class=\"kv\">No parts in inventory yet.</div>";
 
     return `
       <h2>${selectedShipDef.name ? ` ${selectedShipDef.name}` : ""}</h2>
       <div class="ship-gui-layout">
         <section class="ship-gui-main">
           ${renderShipGraphic(shipStatus, selectedShipId, selectedShipState, selectedShipDef, selectedSlot, partDefs)}
-          <div class="kv">${selectedShipDef.name || selectedShipId} | Speed x${selectedShipStats ? selectedShipStats.speedMultiplier.toFixed(2) : "1.00"} | Risk Mit +${selectedShipStats ? (selectedShipStats.riskMitigation * 100).toFixed(1) : "0.0"}% | Yield x${selectedShipStats ? selectedShipStats.yieldMultiplier.toFixed(2) : "1.00"} | Rare x${selectedShipStats ? selectedShipStats.rareDropWeight.toFixed(2) : "1.00"}</div>
-          <div class="kv">Tip: drag an equipped part off the ship graphic to unequip it.</div>
+          <div class="kv">${selectedShipDef.name || selectedShipId}${formatShipStatSummary(selectedShipStats)} | Tip: drag an equipped part off the ship graphic to unequip it.</div>
         </section>
         <section class="ship-gui-inventory">
           <div class="inventory-header">
@@ -934,14 +1386,15 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     }
 
     const shipStats = expeditionStatus.selectedShipStats;
+    const selectedShipName = toTitleToken(expeditionStatus.selectedShip);
     const shipLine = expeditionStatus.selectedShip
-      ? `<div class="kv">Ship: ${expeditionStatus.selectedShip.toUpperCase()}${shipStats ? ` | Speed x${shipStats.speedMultiplier.toFixed(2)} | Risk Mit +${(shipStats.riskMitigation * 100).toFixed(1)}% | Yield x${shipStats.yieldMultiplier.toFixed(2)}` : ""}</div>`
+      ? `<div class="kv">${selectedShipName}${formatShipStatSummary(shipStats)}</div>`
       : "<div class=\"kv\">No ship selected.</div>";
     const autoMode = expeditionStatus.autoRouteMode || "manual";
     const modeLabels = { manual: "Manual", safe: "Safe", balanced: "Balanced", aggressive: "Aggro" };
     const modeRow = `
       <div class="expedition-mode-row">
-        <div class="kv">Route Mode</div>
+        <div class="kv">Voyage Mode</div>
         <div class="expedition-mode-buttons">
           ${Object.keys(modeLabels)
             .map((mode) => actionButton(modeLabels[mode], `ghost compact mode-btn ${autoMode === mode ? "active" : ""}`, `expedition:mode:${mode}`))
@@ -949,11 +1402,21 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         </div>
       </div>
     `;
+    const voyageMaps = Array.isArray(expeditionStatus.voyageMaps) ? expeditionStatus.voyageMaps : [];
+    const mapSummary = voyageMaps.length > 0
+      ? `<div class="kv expedition-meta-inline"><strong>Map Inventory:</strong> ${voyageMaps
+        .map((map) => `${map.name} x${Math.max(0, Number(map.owned) || 0)}`)
+        .join(" | ")}</div>`
+      : "";
+    const metaSummary = `<div class="kv expedition-meta-inline"><strong>Successful Runs:</strong> ${formatInt(expeditionStatus.meta.completedRuns || 0)} | <strong>Failed Runs:</strong> ${formatInt(expeditionStatus.meta.failedRuns || 0)}</div>`;
     const subTabs = `
-      <div class="expedition-subtabs">
-        ${actionButton("Runs", `ghost ${ui.expeditionsView === "runs" ? "active" : ""}`, "expedition:view:runs")}
-        ${actionButton("Fleet Dock", `ghost ${ui.expeditionsView === "fleet" ? "active" : ""}`, "expedition:view:fleet")}
-        ${actionButton("Ships", `ghost ${ui.expeditionsView === "ship" ? "active" : ""}`, "expedition:view:ship")}
+      <div class="expedition-topbar">
+        <div class="expedition-subtabs">
+          ${actionButton("Runs", `ghost ${ui.expeditionsView === "runs" ? "active" : ""}`, "expedition:view:runs")}
+          ${actionButton("Fleet Dock", `ghost ${ui.expeditionsView === "fleet" ? "active" : ""}`, "expedition:view:fleet")}
+          ${actionButton("Ships", `ghost ${ui.expeditionsView === "ship" ? "active" : ""}`, "expedition:view:ship")}
+        </div>
+        ${metaSummary}
       </div>
     `;
 
@@ -965,55 +1428,35 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       return `${subTabs}${renderShipGuiPanel()}`;
     }
 
-    const metaRows = `
-      <div class="row">
-        <div class="kv"><strong>Intel:</strong> ${formatNumber(expeditionStatus.meta.intel || 0)} | <strong>Completed Runs:</strong> ${formatNumber(expeditionStatus.meta.completedRuns || 0)} | <strong>Failed Runs:</strong> ${formatNumber(expeditionStatus.meta.failedRuns || 0)} | <strong>Best Band:</strong> ${formatNumber(expeditionStatus.meta.bestBand || 0)}</div>
-      </div>
-    `;
-
     const chest = expeditionStatus.rewardsChest || { capacity: 10, items: [] };
     const chestItems = Array.isArray(chest.items) ? chest.items : [];
     const chestCapacity = Math.max(1, Number(chest.capacity) || 10);
     const chestCount = chestItems.length;
     const chestFull = chestCount >= chestCapacity;
-    const nextChestReward = chestItems[0] || null;
-    const nextRewards = nextChestReward?.rewards || {};
-    const nextDropCount = Array.isArray(nextChestReward?.drops) ? nextChestReward.drops.length : 0;
+    const claimPreview = chestCount > 0 ? systems.expeditions.getClaimAllPreview() : null;
+    const accumulatedRewards = claimPreview?.ok
+      ? (claimPreview.totalRewards || { matter: 0, fire: 0, intel: 0 })
+      : { matter: 0, fire: 0, intel: 0 };
+    const accumulatedDropCount = claimPreview?.ok && Array.isArray(claimPreview.drops)
+      ? claimPreview.drops.length
+      : 0;
     const continuous = expeditionStatus.continuous || { active: false, bandId: null, stopReason: "" };
     const loopState = continuous.active
       ? `Running${continuous.bandId ? ` (${continuous.bandId})` : ""}`
       : (continuous.stopReason ? `Stopped: ${continuous.stopReason}` : "Idle");
-    const claimPopup = ui.chestClaimPopup
-      ? `
-        <div class="expedition-claim-popup" role="dialog" aria-live="polite">
-          <div class="expedition-claim-popup__title">Chest Loot</div>
-          <div class="expedition-claim-popup__line">${ui.chestClaimPopup.runCount} run${ui.chestClaimPopup.runCount === 1 ? "" : "s"}</div>
-          <div class="expedition-claim-popup__line">+${formatNumber(ui.chestClaimPopup.totalRewards.matter || 0)} Matter | +${formatNumber(ui.chestClaimPopup.totalRewards.fire || 0)} Fire</div>
-          <div class="expedition-claim-popup__line">+${formatNumber(ui.chestClaimPopup.totalRewards.intel || 0)} Intel${ui.chestClaimPopup.totalRewards.shards > 0 ? ` | +${formatNumber(ui.chestClaimPopup.totalRewards.shards)} Shards` : ""}</div>
-          ${ui.chestClaimPopup.rareDropNames?.length
-            ? `<div class="expedition-claim-popup__line">Rare: ${ui.chestClaimPopup.rareDropNames.join(" | ")}</div>`
-            : ""}
-          <div class="expedition-claim-popup__actions">
-            ${actionButton("Close", "ghost compact", "expedition:claim-all:cancel")}
-            ${actionButton("Claim", "primary compact", "expedition:claim-all:confirm")}
-          </div>
-        </div>
-      `
-      : "";
     const chestRow = `
       <div class="expedition-chest-compact">
         <div class="expedition-chest-main">
           <div class="expedition-chest-title">Rewards Chest ${chestCount}/${chestCapacity}${chestFull ? " • FULL" : ""}</div>
           <div class="expedition-chest-stats">
             <span>Loop: ${loopState}</span>
-            ${nextChestReward
-              ? `<span>Next: +${formatNumber(nextRewards.matter || 0)}M, +${formatNumber(nextRewards.fire || 0)}F, +${formatNumber(nextRewards.intel || 0)}I${nextDropCount > 0 ? `, ${nextDropCount} drop` : ""}</span>`
+            ${chestCount > 0
+              ? `<span>Booty: +${formatNumber(accumulatedRewards.matter || 0)}M, +${formatNumber(accumulatedRewards.fire || 0)}F, +${formatNumber(accumulatedRewards.intel || 0)}I${accumulatedDropCount > 0 ? `, ${accumulatedDropCount} drop${accumulatedDropCount === 1 ? "" : "s"}` : ""}</span>`
               : "<span>Chest empty</span>"}
           </div>
         </div>
         <div class="expedition-chest-actions">
           ${actionButton("Claim All", "secondary", "expedition:claim-all", chestCount === 0)}
-          ${claimPopup}
         </div>
       </div>
     `;
@@ -1032,27 +1475,13 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       const totalMitigation = clamp((state.perks.expeditionRiskMitigation || 0) + shipRiskMitigation, 0, 0.8);
       const currentRisk = clamp((band?.risk || 0) + (run.modifiers?.riskDelta || 0), 0.04, 0.98);
       const mitigatedRisk = currentRisk * (1 - totalMitigation);
-      const routeRows = (run.routeHistory || [])
-        .slice(-3)
-        .map((item) => `<div class="kv">S${item.stage}: ${item.name}</div>`)
-        .join("");
-      const encounterRows = (run.encounterLog || [])
-        .slice(-2)
-        .map((entry) => `<div class="kv">${entry.name} (${entry.success ? "ok" : "fail"})</div>`)
-        .join("");
-      const dropRows = (run.pendingDrops || [])
-        .slice(-3)
-        .map((drop) => `<div class="kv">${drop.name}</div>`)
-        .join("");
-      const logDetails = (routeRows || encounterRows || dropRows)
-        ? `
-          <details class="expedition-log">
-            <summary>Run Log</summary>
-            ${routeRows ? `<div>${routeRows}</div>` : ""}
-            ${encounterRows ? `<div>${encounterRows}</div>` : ""}
-            ${dropRows ? `<div>${dropRows}</div>` : ""}
-          </details>
-        `
+      const stageCount = Math.max(1, Number(run.stageCount) || 1);
+      const stageNumber = Math.min(run.stageIndex + 1, stageCount);
+      const progressNotches = stageCount > 1
+        ? Array.from({ length: stageCount - 1 }, (_, index) => {
+          const left = (((index + 1) / stageCount) * 100).toFixed(3);
+          return `<span class="expedition-progress-notch" style="left:${left}%"></span>`;
+        }).join("")
         : "";
 
       const choicePanel = run.awaitingChoice
@@ -1064,8 +1493,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
                 const yieldDelta = Number(choice.yieldDelta) || 0;
                 const speed = Number(choice.speedMultiplier || 1);
                 const intelFlat = Math.round(Number(choice.intelFlat || 0));
-                const riskText = `${risk >= 0 ? "+" : ""}${(risk * 100).toFixed(1)}% risk`;
-                const yieldText = `${yieldDelta >= 0 ? "+" : ""}${(yieldDelta * 100).toFixed(1)}% yield`;
+                const riskText = `${formatSignedPercent(risk)} risk`;
+                const yieldText = `${formatSignedPercent(yieldDelta)} yield`;
                 return `
                   <div class="expedition-choice-card">
                     <div class="expedition-choice-main">
@@ -1073,7 +1502,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
                       <div class="expedition-choice-stats">
                         <span>${riskText}</span>
                         <span>${yieldText}</span>
-                        <span>x${speed.toFixed(2)} speed</span>
+                        <span>x${formatIntOrFixed(speed)} speed</span>
                         <span>${intelFlat >= 0 ? "+" : ""}${intelFlat} intel</span>
                       </div>
                       ${choice.unlocked ? "" : `<div class="kv">${choice.lockReason || "Locked"}</div>`}
@@ -1091,46 +1520,69 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         ${subTabs}
         <h2>Prestige Expeditions</h2>
         ${shipLine}
+        ${mapSummary}
         ${modeRow}
         ${chestRow}
         <div class="row expedition-run-card">
           <div class="expedition-run-main">
-            <div><strong>${band?.name || run.bandId}</strong> in progress</div>
-            <div class="kv" id="expedition-stage-text">Stage ${Math.min(run.stageIndex + 1, run.stageCount)} / ${run.stageCount} | ${progress.toFixed(1)}% total</div>
-            <div class="kv" id="expedition-segment-text">Segment: ${formatDuration(run.segmentElapsedSeconds || 0)} / ${formatDuration(run.segmentDurationSeconds || 0)}</div>
-            <div class="kv">Risk ${(currentRisk * 100).toFixed(1)}% | Mitigated ${(mitigatedRisk * 100).toFixed(1)}%</div>
-            <div class="kv">Mode ${run.autoRouteMode || autoMode} | Reward x${Number(run.automationRewardMultiplier || 1).toFixed(2)}</div>
-            ${logDetails}
+            <div class="kv" id="expedition-stage-text">Stage ${stageNumber}/${stageCount}</div>
+            <div class="kv" id="expedition-risk-text">Risk ${formatPercent(mitigatedRisk)}</div>
+            ${renderBandRareDropTable(run.bandId, "Rare Drops", `run:${run.bandId}`)}
           </div>
           ${actionButton("Abandon", "ghost", "expedition:abandon")}
         </div>
-        <div class="expedition-progress"><span id="expedition-progress-fill" style="width:${Math.max(2, progress).toFixed(1)}%"></span></div>
+        <div class="expedition-progress"><span id="expedition-progress-fill" style="width:${Math.max(2, progress).toFixed(1)}%"></span>${progressNotches}</div>
         ${choicePanel}
-        ${metaRows}
       `;
     }
 
     const bandRows = expeditionStatus.bands
       .map((band) => {
         const cost = band.cost || {};
+        const purchaseIntelCost = Math.max(0, Number(band.purchaseIntelCost) || 0);
+        const purchased = Boolean(band.purchased);
         const disabledByUnlock = !band.unlock.ok;
         const disabledByChest = chestFull;
-        const disabled = disabledByUnlock || disabledByChest;
+        const disabledByPurchase = !purchased;
+        const disabled = disabledByUnlock || disabledByChest || disabledByPurchase;
+        const mapRequirement = band.mapRequirement || { ok: true };
+        const mapName = mapRequirement.mapName || toTitleToken(mapRequirement.requiredMapId || "");
+        const hasMap = Math.max(0, Number(mapRequirement.owned) || 0) > 0;
+        const mapUnlocked = Boolean(mapRequirement.unlocked);
+        const canUseMap = Boolean(mapRequirement.requiredMapId) && hasMap && !mapUnlocked;
+        const canBuy = !purchased && band.unlock.ok && purchaseIntelCost > 0;
+        const buyLabel = `Buy ${formatNumber(purchaseIntelCost)}I`;
+        const encodedMapId = mapRequirement.requiredMapId
+          ? encodeURIComponent(mapRequirement.requiredMapId)
+          : "";
         const requirements = disabledByUnlock
           ? `<div class="kv">${band.unlock.reason}</div>`
-          : (disabledByChest ? "<div class=\"kv\">Chest full. Claim rewards first.</div>" : "");
-        const costLine = `${formatNumber(cost.matter || 0)}M | ${formatNumber(cost.fire || 0)}F | ${formatNumber(cost.intel || 0)}I`;
+          : (disabledByChest
+            ? "<div class=\"kv\">Chest full. Claim rewards first.</div>"
+            : "");
+        const costLine = `${formatNumber(cost.matter || 0)}M | ${formatNumber(cost.fire || 0)}F`;
+        const mapLine = mapRequirement.requiredMapId
+          ? `<div class="kv">Map: ${mapName || mapRequirement.requiredMapId} ${mapUnlocked ? "(Unlocked)" : `(Owned: ${Math.max(0, Number(mapRequirement.owned) || 0)})`}</div>`
+          : "";
+        const shipRequirementLine = band.requiredShip
+          ? `<div class="kv">Ship Requirement: ${band.requiredShipName || toTitleToken(band.requiredShip)}</div>`
+          : "";
         return `
           <article class="expedition-band-card">
-            <div><strong>Band ${band.rank}: ${band.name}</strong></div>
+            <div><strong>${band.name}</strong></div>
             <div class="kv">${costLine}</div>
-            <div class="kv">${formatDuration(band.durationSeconds || 0)} | ${(Number(band.risk || 0) * 100).toFixed(1)}% risk | Fee ${formatNumber(band.intelLaunchCost || 0)}I</div>
+            <div class="kv">${formatDuration(band.durationSeconds || 0)} | ${formatPercent(Number(band.risk) || 0)} risk</div>
             <div class="kv">${Math.max(1, band.stageCount || 1)} stage${Math.max(1, band.stageCount || 1) === 1 ? "" : "s"}</div>
             ${band.description ? `<div class="kv">${band.description}</div>` : ""}
+            ${mapLine}
+            ${shipRequirementLine}
             <div class="expedition-inline-note">
               ${requirements}
             </div>
+            ${renderBandRareDropTable(band.id, "Rare Drops", `band:${band.id}`)}
             <div class="expedition-band-actions">
+              ${canUseMap ? actionButton("Use Map", "ghost compact", `expedition:use-map:${encodedMapId}`) : ""}
+              ${!purchased && purchaseIntelCost > 0 ? actionButton(buyLabel, "ghost compact", `expedition:buy:${band.id}`, !canBuy) : ""}
               ${actionButton("Start Loop", "secondary", `expedition:start:${band.id}`, disabled)}
             </div>
           </article>
@@ -1142,10 +1594,10 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       ${subTabs}
       <h2>Prestige Expeditions</h2>
       ${shipLine}
+      ${mapSummary}
       ${modeRow}
       ${chestRow}
       <div class="expedition-band-grid">${bandRows}</div>
-      ${metaRows}
     `;
   }
 
@@ -1158,6 +1610,9 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     }
     if (ui.activeTab === "expeditions") {
       return renderExpeditionsPanel();
+    }
+    if (ui.activeTab === "collection") {
+      return renderCollectionPanel();
     }
     if (ui.activeTab === "ascend") {
       return renderAscendPanel();
@@ -1179,7 +1634,8 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const isAscendTab = ui.activeTab === "ascend";
     const isExpeditionsTab = ui.activeTab === "expeditions" && expeditionUnlocked;
     const isFullWidthTab = isAscendTab || isExpeditionsTab;
-    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions")) {
+    snapshotRareDropTableState();
+    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection")) {
       const currentScroll = ui.panelEl.querySelector(".scroll-panel");
       if (currentScroll) {
         ui.scrollPositions[ui.activeTab] = currentScroll.scrollTop;
@@ -1191,7 +1647,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     }
     ui.panelEl.innerHTML = renderTabPanel(rates);
     applyTabActiveState();
-    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions")) {
+    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection")) {
       const nextScroll = ui.panelEl.querySelector(".scroll-panel");
       if (nextScroll) {
         nextScroll.scrollTop = ui.scrollPositions[ui.activeTab] || 0;
@@ -1206,6 +1662,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       refs.mainGrid.classList.remove("ascend-mode");
     }
     ui.lastExpeditionSignature = getExpeditionRenderSignature();
+    persistCurrentViewState();
   }
 
   function getExpeditionRenderSignature() {
@@ -1228,8 +1685,6 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       run?.pendingDrops?.length ?? 0,
       chestCount,
       chestCapacity,
-      ui.chestClaimPopup ? 1 : 0,
-      ui.chestClaimPopup?.runCount ?? 0,
       continuous.active ? 1 : 0,
       continuous.bandId || "",
       continuous.stopReason || ""
@@ -1253,16 +1708,23 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     const completedStages = run.stageIndex + segmentProgress;
     const totalProgressRaw = run.stageCount > 0 ? completedStages / run.stageCount : 0;
     const progress = Math.max(0, Math.min(100, totalProgressRaw * 100));
+    const stageCount = Math.max(1, Number(run.stageCount) || 1);
+    const stageNumber = Math.min(run.stageIndex + 1, stageCount);
+    const band = status.bands.find((item) => item.id === run.bandId);
+    const shipRiskMitigation = run.ship?.stats?.riskMitigation || 0;
+    const totalMitigation = clamp((state.perks.expeditionRiskMitigation || 0) + shipRiskMitigation, 0, 0.8);
+    const currentRisk = clamp((band?.risk || 0) + (run.modifiers?.riskDelta || 0), 0.04, 0.98);
+    const mitigatedRisk = currentRisk * (1 - totalMitigation);
 
     const stageEl = ui.panelEl.querySelector("#expedition-stage-text");
-    const segmentEl = ui.panelEl.querySelector("#expedition-segment-text");
+    const riskEl = ui.panelEl.querySelector("#expedition-risk-text");
     const progressEl = ui.panelEl.querySelector("#expedition-progress-fill");
 
     if (stageEl) {
-      stageEl.textContent = `Stage ${Math.min(run.stageIndex + 1, run.stageCount)} / ${run.stageCount} | ${progress.toFixed(1)}% total`;
+      stageEl.textContent = `Stage ${stageNumber}/${stageCount}`;
     }
-    if (segmentEl) {
-      segmentEl.textContent = `Segment: ${formatDuration(run.segmentElapsedSeconds || 0)} / ${formatDuration(run.segmentDurationSeconds || 0)}`;
+    if (riskEl) {
+      riskEl.textContent = `Risk ${formatPercent(mitigatedRisk)}`;
     }
     if (progressEl) {
       progressEl.style.width = `${Math.max(2, progress).toFixed(1)}%`;
@@ -1431,6 +1893,14 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
           renderPanel();
         }
       } else if (action === "ascend") {
+        const ascendGain = Math.max(1, ascendShardGainFromResources(state));
+        const ascendCostValues = ascendCost(state);
+        const confirmed = window.confirm(
+          `Ascend now for +${formatNumber(ascendGain)} Shards?\nThis spends ${formatNumber(ascendCostValues.matterCost)} Matter and ${formatNumber(ascendCostValues.fireCost)} Fire.`
+        );
+        if (!confirmed) {
+          return;
+        }
         const result = systems.actions.ascend();
         setNotice(result.ok ? `Ascension complete. +${result.gain} shards.` : result.reason, result.ok);
         renderPanel();
@@ -1461,7 +1931,17 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
       } else if (action.startsWith("expedition:mode:")) {
         const mode = action.split(":")[2] || "manual";
         const result = systems.expeditions.setAutoRouteMode(mode);
-        setNotice(result.ok ? `Route mode set to ${result.mode}.` : (result.reason || "Unable to set route mode."), result.ok);
+        setNotice(result.ok ? `Voyage mode set to ${result.mode}.` : (result.reason || "Unable to set voyage mode."), result.ok);
+        renderPanel();
+      } else if (action.startsWith("expedition:buy:")) {
+        const bandId = action.split(":")[2];
+        const result = systems.expeditions.buyVoyage(bandId);
+        const notice = result.ok
+          ? (result.cost > 0
+            ? `Voyage purchased for ${formatNumber(result.cost)} Intel.`
+            : "Voyage already available.")
+          : result.reason;
+        setNotice(notice, result.ok);
         renderPanel();
       } else if (action.startsWith("expedition:start:")) {
         const bandId = action.split(":")[2];
@@ -1469,28 +1949,17 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const mode = systems.expeditions.getStatus().autoRouteMode || "manual";
         setNotice(result.ok ? `Expedition loop launched (${mode}).` : result.reason, result.ok);
         renderPanel();
+      } else if (action.startsWith("expedition:use-map:")) {
+        const encodedMapId = action.slice("expedition:use-map:".length);
+        const mapId = decodeURIComponent(encodedMapId || "");
+        const result = systems.expeditions.useVoyageMap(mapId);
+        const notice = result.ok
+          ? `${result.mapName} consumed. ${result.bandName} unlocked.`
+          : result.reason;
+        setNotice(notice, result.ok);
+        renderPanel();
       } else if (action === "expedition:claim-all") {
-        const preview = systems.expeditions.getClaimAllPreview();
-        if (!preview.ok) {
-          setNotice(preview.reason, false);
-          renderPanel();
-          return;
-        }
-        const rareDropNames = summarizeDropNames(preview.drops);
-        ui.activeTab = "expeditions";
-        ui.expeditionsView = "runs";
-        ui.chestClaimPopup = {
-          runCount: Math.max(0, Number(preview.runCount) || 0),
-          totalRewards: preview.totalRewards || { matter: 0, fire: 0, shards: 0, intel: 0 },
-          rareDropNames
-        };
-        renderPanel();
-      } else if (action === "expedition:claim-all:cancel") {
-        ui.chestClaimPopup = null;
-        renderPanel();
-      } else if (action === "expedition:claim-all:confirm") {
         const result = systems.expeditions.claimChestAll();
-        ui.chestClaimPopup = null;
         const dropCount = Array.isArray(result.drops) ? result.drops.length : 0;
         const runCount = Math.max(0, Number(result.runsClaimed) || 0);
         const claimNotice = result.ok
@@ -1508,10 +1977,20 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
         const choiceId = action.split(":")[2];
         const result = systems.expeditions.chooseRoute(choiceId);
         const notice = result.ok
-          ? (result.encounter ? `Route locked. Encounter: ${result.encounter.name}.` : "Route locked.")
+          ? (result.encounter ? `Voyage path locked. Encounter: ${result.encounter.name}.` : "Voyage path locked.")
           : result.reason;
         setNotice(notice, result.ok);
         renderPanel();
+      } else if (action.startsWith("collection:claim:")) {
+        const milestoneId = action.split(":")[2] || "";
+        const result = systems.expeditions.claimCollectionMilestone(milestoneId);
+        setNotice(result.ok ? `${result.milestone.name} claimed.` : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("rare-popup:dismiss:")) {
+        const popupId = Number(action.split(":")[2]);
+        if (Number.isFinite(popupId)) {
+          dismissRareDropPopup(popupId);
+        }
       } else if (action.startsWith("ship:select:")) {
         const shipId = action.split(":")[2];
         const result = systems.ships.selectShip(shipId);
@@ -1569,6 +2048,20 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
       refreshHud();
     });
+
+    appEl.addEventListener("toggle", (event) => {
+      const detailsEl = event.target instanceof Element
+        ? event.target.closest("details.expedition-loot-table[data-loot-table-key]")
+        : null;
+      if (!detailsEl) {
+        return;
+      }
+      const key = detailsEl.dataset.lootTableKey;
+      if (!key) {
+        return;
+      }
+      ui.rareDropTableState[key] = detailsEl.open;
+    }, true);
 
     function clearShipDropTargets() {
       appEl.querySelectorAll(".ship-zone.drop-target, .ship-zone.drop-invalid").forEach((zoneEl) => {
@@ -1775,7 +2268,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
     refs.fire.textContent = formatNumber(state.resources.fire);
     refs.shards.textContent = formatNumber(state.resources.shards);
     refs.intel.textContent = formatNumber(state.expeditions?.meta?.intel || 0);
-    refs.prodInline.textContent = `x${state.perks.productionMultiplier.toFixed(2)}`;
+    refs.prodInline.textContent = `x${formatIntOrFixed(state.perks.productionMultiplier)}`;
 
     refs.intelCard.classList.toggle("is-locked", !expeditionUnlocked);
     refs.intelHint.textContent = expeditionUnlocked ? "Runs and ship upgrades" : "Unlock Expedition Keystone";
@@ -1807,10 +2300,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
 
     refs.notice.textContent = ui.notice;
     refs.notice.classList.toggle("good", ui.good);
-
-    if (ui.chestClaimPopup && chestCount === 0) {
-      ui.chestClaimPopup = null;
-    }
+    renderRareDropPopups();
 
     if (ui.debugPanelVisible) {
       const now = Date.now();
@@ -1834,6 +2324,7 @@ export function createRenderer({ appEl, state, balance, generatorDefs, formulas,
   return {
     start,
     setNotice,
+    showRareDropPopup,
     refreshHud,
     toggleDebugPanel
   };

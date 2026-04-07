@@ -27,7 +27,9 @@ export function recomputePerks({ state, balance, ascendNodes }) {
     expeditionRiskMitigation: 0,
     expeditionShardBonus: 0,
     expeditionIntelMultiplier: 1,
-    partTierCapBonus: 0
+    partTierCapBonus: 0,
+    facilityMaxLevelBonus: 0,
+    rewardsChestCapacityBonus: 0
   };
 
   const kineticGloves = (state.upgrades.kineticGloves || 0) * upgradePower;
@@ -52,7 +54,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const fluxPistons = (state.upgrades.fluxPistons || 0) * upgradePower;
   if (fluxPistons > 0) {
-    perks.generatorCostGrowthMultiplier *= Math.pow(0.9985, fluxPistons);
+    perks.generatorCostGrowthMultiplier *= Math.pow(0.999, fluxPistons);
   }
   const cinderThreads = (state.upgrades.cinderThreads || 0) * upgradePower;
   if (cinderThreads > 0) {
@@ -337,8 +339,80 @@ export function recomputePerks({ state, balance, ascendNodes }) {
       if (effect.partTierCapBonus) {
         perks.partTierCapBonus += Number(effect.partTierCapBonus) || 0;
       }
+      if (effect.facilityMaxLevelBonus) {
+        perks.facilityMaxLevelBonus += Number(effect.facilityMaxLevelBonus) || 0;
+      }
+      if (effect.rewardsChestCapacityBonus) {
+        perks.rewardsChestCapacityBonus += Number(effect.rewardsChestCapacityBonus) || 0;
+      }
     });
   }
+
+  const claimedCollectionMilestones = state.expeditions?.collection?.claimedMilestones || {};
+  const collectionMilestones = Array.isArray(balance?.expeditions?.collectionMilestones)
+    ? balance.expeditions.collectionMilestones
+    : [];
+  collectionMilestones.forEach((milestone) => {
+    const milestoneId = typeof milestone?.id === "string" ? milestone.id : "";
+    if (!milestoneId || !claimedCollectionMilestones[milestoneId]) {
+      return;
+    }
+    const effect = milestone.effect && typeof milestone.effect === "object" ? milestone.effect : {};
+    if (effect.productionMultiplier) {
+      perks.productionMultiplier *= effect.productionMultiplier;
+    }
+    if (effect.matterRateMultiplier) {
+      perks.matterRateMultiplier *= effect.matterRateMultiplier;
+    }
+    if (effect.fireRateMultiplier) {
+      perks.fireRateMultiplier *= effect.fireRateMultiplier;
+    }
+    if (effect.clickMatterBonus) {
+      perks.clickMatterBonus += effect.clickMatterBonus;
+    }
+    if (effect.conversionFireBonus) {
+      perks.conversionFireBonus += effect.conversionFireBonus;
+    }
+    if (effect.prestigeGainMultiplier) {
+      perks.prestigeGainMultiplier *= effect.prestigeGainMultiplier;
+    }
+    if (effect.generatorCostGrowthMultiplier) {
+      perks.generatorCostGrowthMultiplier *= effect.generatorCostGrowthMultiplier;
+    }
+    if (effect.conversionCostMultiplier) {
+      perks.conversionCostMultiplier *= effect.conversionCostMultiplier;
+    }
+    if (effect.offlineEfficiencyMultiplier) {
+      perks.offlineEfficiencyMultiplier *= effect.offlineEfficiencyMultiplier;
+    }
+    if (effect.researchCostMultiplier) {
+      perks.researchCostMultiplier *= effect.researchCostMultiplier;
+    }
+    if (effect.expeditionYieldMultiplier) {
+      perks.expeditionYieldMultiplier *= effect.expeditionYieldMultiplier;
+    }
+    if (effect.expeditionSpeedMultiplier) {
+      perks.expeditionSpeedMultiplier *= effect.expeditionSpeedMultiplier;
+    }
+    if (effect.expeditionRiskMitigation) {
+      perks.expeditionRiskMitigation += effect.expeditionRiskMitigation;
+    }
+    if (effect.expeditionShardBonus) {
+      perks.expeditionShardBonus += effect.expeditionShardBonus;
+    }
+    if (effect.expeditionIntelMultiplier) {
+      perks.expeditionIntelMultiplier *= effect.expeditionIntelMultiplier;
+    }
+    if (effect.partTierCapBonus) {
+      perks.partTierCapBonus += Number(effect.partTierCapBonus) || 0;
+    }
+    if (effect.facilityMaxLevelBonus) {
+      perks.facilityMaxLevelBonus += Number(effect.facilityMaxLevelBonus) || 0;
+    }
+    if (effect.rewardsChestCapacityBonus) {
+      perks.rewardsChestCapacityBonus += Number(effect.rewardsChestCapacityBonus) || 0;
+    }
+  });
 
   perks.generatorCostGrowthMultiplier = clampMin(perks.generatorCostGrowthMultiplier, 0.2);
   perks.conversionCostMultiplier = clampMin(perks.conversionCostMultiplier, 0.05);
@@ -358,6 +432,8 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   perks.expeditionSpeedMultiplier = clampMin(perks.expeditionSpeedMultiplier, 0.05);
   perks.expeditionIntelMultiplier = clampMin(perks.expeditionIntelMultiplier, 0.05);
   perks.partTierCapBonus = Math.max(0, Math.floor(Number(perks.partTierCapBonus) || 0));
+  perks.facilityMaxLevelBonus = Math.max(0, Math.floor(Number(perks.facilityMaxLevelBonus) || 0));
+  perks.rewardsChestCapacityBonus = Math.max(0, Math.floor(Number(perks.rewardsChestCapacityBonus) || 0));
   state.perks = perks;
   return perks;
 }

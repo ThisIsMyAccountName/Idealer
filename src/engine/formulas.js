@@ -1,8 +1,18 @@
 import { BALANCE } from "../config/gameBalance.js";
 
+export function resolveGeneratorCostGrowth(costGrowthMultiplier = 1) {
+  const parsedMultiplier = Number(costGrowthMultiplier);
+  const safeMultiplier = Number.isFinite(parsedMultiplier) ? parsedMultiplier : 1;
+  const normalizedMultiplier = Math.max(0, safeMultiplier);
+  const growthDelta = Math.max(0, BALANCE.generatorCostGrowth - 1);
+  const growth = 1 + growthDelta * normalizedMultiplier;
+  return Math.max(1.01, growth);
+}
+
 export function generatorCost(generatorDef, level, costGrowthMultiplier = 1) {
-  const growth = Math.max(1.05, BALANCE.generatorCostGrowth * costGrowthMultiplier);
-  return Math.floor(generatorDef.baseCost * Math.pow(growth, level));
+  const growth = resolveGeneratorCostGrowth(costGrowthMultiplier);
+  const rawCost = generatorDef.baseCost * (Math.pow(growth, level + 1) / BALANCE.generatorCostGrowth);
+  return Math.max(0.01, Math.round(rawCost * 100) / 100);
 }
 
 export function normalizeUpgradeCostCurve(def, curveOverride) {

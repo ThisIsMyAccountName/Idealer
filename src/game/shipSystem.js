@@ -12,10 +12,19 @@ function ensureShip(state, shipId) {
 export function createShipSystem({ state, balance, resourceManager, eventBus }) {
   const expeditionBalance = balance.expeditions || {};
   const shipDefs = expeditionBalance.ships || {};
+  const shipTierOrder = Object.keys(shipDefs);
   const facilityDefs = expeditionBalance.shipFacilities || {};
+  function isPartDropDefinition(entry) {
+    if (!entry || typeof entry !== "object" || entry.blueprintForShip) {
+      return false;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    const slot = typeof entry.slot === "string" ? entry.slot.trim() : "";
+    return Boolean(id && slot);
+  }
   const partDefs = Object.values(expeditionBalance.rareBlueprintDrops || {})
     .flat()
-    .filter((entry) => entry && !entry.blueprintForShip)
+    .filter((entry) => isPartDropDefinition(entry))
     .reduce((map, entry) => {
       map[entry.id] = entry;
       return map;
@@ -120,6 +129,68 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
     const linearStep = Number.isFinite(override) ? Math.max(0, override) : settings.linearEffectPerTier;
     const safeTier = Math.max(1, Math.floor(Number(tier) || 1));
     return 1 + (safeTier - 1) * linearStep;
+  }
+
+  function getFacilitySpec(shipId, facilityId) {
+    const base = facilityDefs[facilityId];
+    if (!base) {
+      return null;
+    }
+    const shipProfile = shipDefs?.[shipId]?.facilityProfile?.[facilityId] || {};
+    const facilityCapBonus = Math.max(0, Math.floor(Number(state.perks?.facilityMaxLevelBonus) || 0));
+    const baseMaxLevel = Math.max(1, Math.floor(Number(shipProfile.maxLevel) || Number(base.maxLevel) || 1));
+    return {
+      ...base,
+      maxLevel: Math.max(1, Math.min(99, baseMaxLevel + facilityCapBonus)),
+      effectsPerLevel: {
+        ...(base.effectsPerLevel || {}),
+        ...(shipProfile.effectsPerLevel || {})
+      }
+    };
+  }
+
+  function getShipTierCostMultiplier(shipId) {
+    const tierIndex = shipTierOrder.indexOf(shipId);
+    const tier = tierIndex >= 0 ? tierIndex + 1 : 1;
+    return 1 + (tier - 1) * 0.85;
+  }
+
+  function scaleFacilityCost(cost, shipId) {
+    const multiplier = getShipTierCostMultiplier(shipId);
+    return {
+      matter: Math.max(0, Math.floor((Number(cost?.matter) || 0) * multiplier)),
+      fire: Math.max(0, Math.floor((Number(cost?.fire) || 0) * multiplier)),
+      intel: Math.max(0, Math.ceil((Number(cost?.intel) || 0) * multiplier))
+    };
+  }
+
+  function getFacilityUpgradeCost(shipId, facilityId, levelHint = null) {
+    const facilityDef = getFacilitySpec(shipId, facilityId);
+    if (!facilityDef) {
+      return null;
+    }
+    const shipState = ensureShip(state, shipId);
+    const resolvedLevel = levelHint === null
+      ? Math.max(0, Math.floor(Number(shipState?.facilities?.[facilityId]) || 0))
+      : Math.max(0, Math.floor(Number(levelHint) || 0));
+    const rawLevelCosts = Array.isArray(facilityDef.levelCosts) ? facilityDef.levelCosts : [];
+    if (rawLevelCosts.length === 0) {
+      return null;
+    }
+
+    const tail = rawLevelCosts[Math.max(0, rawLevelCosts.length - 1)] || { matter: 0, fire: 0, intel: 0 };
+    const extraLevels = Math.max(0, resolvedLevel - (rawLevelCosts.length - 1));
+    const baseCost = extraLevels <= 0
+      ? rawLevelCosts[resolvedLevel]
+      : {
+        matter: Math.floor((Number(tail.matter) || 0) * Math.pow(1.55, extraLevels)),
+        fire: Math.floor((Number(tail.fire) || 0) * Math.pow(1.52, extraLevels)),
+        intel: Math.ceil((Number(tail.intel) || 0) * Math.pow(1.45, extraLevels))
+      };
+    if (!baseCost) {
+      return null;
+    }
+    return scaleFacilityCost(baseCost, shipId);
   }
 
   function getEquippedPartCounts() {
@@ -256,11 +327,11 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
     };
 
     Object.entries(shipState.facilities || {}).forEach(([facilityId, level]) => {
-      const def = facilityDefs[facilityId];
+      const def = getFacilitySpec(shipId, facilityId);
       if (!def || !def.effectsPerLevel) {
         return;
       }
-      const n = Math.max(0, Math.floor(Number(level) || 0));
+      const n = Math.max(0, Math.min(Math.floor(Number(level) || 0), Number(def.maxLevel) || 0));
       stats.speedMultiplier *= 1 + (def.effectsPerLevel.speedMultiplier || 0) * n;
       stats.yieldMultiplier *= 1 + (def.effectsPerLevel.yieldMultiplier || 0) * n;
       stats.rareDropWeight *= 1 + (def.effectsPerLevel.rareDropWeight || 0) * n;
@@ -323,7 +394,7 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
     const cost = shipDef.purchaseCost || {};
     const matter = Math.max(0, cost.matter || 0);
     const fire = Math.max(0, cost.fire || 0);
-    const shards = Math.max(0, cost.shards || 0);
+    const intel = Math.max(0, Number(cost.intel || 0));
 
     if (!resourceManager.spend("matter", matter)) {
       return { ok: false, reason: `Need ${matter} Matter.` };
@@ -332,11 +403,12 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
       state.resources.matter += matter;
       return { ok: false, reason: `Need ${fire} Fire.` };
     }
-    if (!resourceManager.spend("shards", shards)) {
+    if ((state.expeditions.meta.intel || 0) < intel) {
       state.resources.matter += matter;
       state.resources.fire += fire;
-      return { ok: false, reason: `Need ${shards} Shards.` };
+      return { ok: false, reason: `Need ${intel} Intel.` };
     }
+    state.expeditions.meta.intel = Math.max(0, Number(state.expeditions.meta.intel || 0) - intel);
 
     shipState.acquired = true;
     eventBus.emit("ship:bought", { shipId });
@@ -351,6 +423,20 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
     if (!shipState.acquired) {
       return { ok: false, reason: "Ship not acquired." };
     }
+
+    const activeRun = state.expeditions.activeRun;
+    if (activeRun && typeof activeRun.bandId === "string") {
+      const activeBand = (expeditionBalance.bands || []).find((band) => band.id === activeRun.bandId) || null;
+      const requiredShip = typeof activeBand?.requiredShip === "string" ? activeBand.requiredShip.trim() : "";
+      if (requiredShip && shipId !== requiredShip) {
+        const requiredShipName = shipDefs[requiredShip]?.name || requiredShip;
+        return {
+          ok: false,
+          reason: `Cannot change ship during this voyage. ${requiredShipName} is required.`
+        };
+      }
+    }
+
     state.expeditions.selectedShip = shipId;
     eventBus.emit("ship:selected", { shipId });
     return { ok: true };
@@ -358,7 +444,7 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
 
   function upgradeFacility(shipId, facilityId) {
     const shipState = ensureShip(state, shipId);
-    const facilityDef = facilityDefs[facilityId];
+    const facilityDef = getFacilitySpec(shipId, facilityId);
     if (!shipState || !facilityDef) {
       return { ok: false, reason: "Unknown ship or facility." };
     }
@@ -371,7 +457,7 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
       return { ok: false, reason: "Facility is maxed." };
     }
 
-    const cost = facilityDef.levelCosts?.[currentLevel];
+    const cost = getFacilityUpgradeCost(shipId, facilityId, currentLevel);
     if (!cost) {
       return { ok: false, reason: "Missing upgrade cost data." };
     }
@@ -483,6 +569,8 @@ export function createShipSystem({ state, balance, resourceManager, eventBus }) 
   return {
     getStatus,
     getShipStats,
+    getFacilitySpec,
+    getFacilityUpgradeCost,
     parsePartRef,
     createPartRef,
     getPartFusionCap,

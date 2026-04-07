@@ -1,5 +1,39 @@
 const CURRENT_STATE_VERSION = "0.6.0";
 const PART_TIER_SUFFIX_RE = /@t(\d+)$/i;
+const COLLECTION_ITEM_KEY_SEPARATOR = "::";
+
+function createCollectionItemKey(sourceId, itemId) {
+  const cleanItemId = typeof itemId === "string" ? itemId.trim() : "";
+  if (!cleanItemId) {
+    return "";
+  }
+  const cleanSourceId = typeof sourceId === "string" ? sourceId.trim() : "";
+  const resolvedSourceId = cleanSourceId || "expeditionRareDrops";
+  return `${resolvedSourceId}${COLLECTION_ITEM_KEY_SEPARATOR}${cleanItemId}`;
+}
+
+function parseCollectionItemKey(rawKey) {
+  if (typeof rawKey !== "string") {
+    return null;
+  }
+  const key = rawKey.trim();
+  if (!key) {
+    return null;
+  }
+  const separatorIndex = key.indexOf(COLLECTION_ITEM_KEY_SEPARATOR);
+  if (separatorIndex <= 0) {
+    return {
+      sourceId: "expeditionRareDrops",
+      itemId: key
+    };
+  }
+  const sourceId = key.slice(0, separatorIndex).trim();
+  const itemId = key.slice(separatorIndex + COLLECTION_ITEM_KEY_SEPARATOR.length).trim();
+  if (!sourceId || !itemId) {
+    return null;
+  }
+  return { sourceId, itemId };
+}
 
 function clampInt(value, min = 0, max = Number.MAX_SAFE_INTEGER) {
   const parsed = Math.floor(Number(value) || 0);
@@ -115,7 +149,7 @@ function sanitizeChestItem(item) {
   return {
     success: Boolean(item.success),
     bandId: typeof item.bandId === "string" ? item.bandId : "",
-    bandName: typeof item.bandName === "string" ? item.bandName : "Unknown Route",
+    bandName: typeof item.bandName === "string" ? item.bandName : "Unknown Voyage",
     finalRisk: Math.max(0, Number(item.finalRisk) || 0),
     shipId: typeof item.shipId === "string" ? item.shipId : null,
     routeHistory,
@@ -162,11 +196,11 @@ export function createInitialState() {
       meta: {
         intel: 0,
         unlockedBands: {},
+        purchasedVoyages: {},
         completedRuns: 0,
         failedRuns: 0,
         bestBand: 0,
         autoRouteMode: "manual",
-        intelPressure: {},
         continuous: {
           active: false,
           bandId: null,
@@ -237,7 +271,13 @@ export function createInitialState() {
         }
       },
       blueprintInventory: {},
+      mapInventory: {},
       partInventory: {},
+      collection: {
+        discoveredItems: {},
+        claimedMilestones: {},
+        legacyBackfillDone: false
+      },
       rewardsChest: {
         capacity: 10,
         items: []
@@ -271,7 +311,9 @@ export function createInitialState() {
       expeditionRiskMitigation: 0,
       expeditionShardBonus: 0,
       expeditionIntelMultiplier: 1,
-      partTierCapBonus: 0
+      partTierCapBonus: 0,
+      facilityMaxLevelBonus: 0,
+      rewardsChestCapacityBonus: 0
     }
   };
 }
@@ -296,6 +338,10 @@ export function sanitizeState(state) {
     meta: {
       ...safe.expeditions.meta,
       ...(state.expeditions?.meta || {})
+    },
+    collection: {
+      ...safe.expeditions.collection,
+      ...(state.expeditions?.collection || {})
     }
   };
   safe.perks = { ...safe.perks, ...(state.perks || {}) };
@@ -325,6 +371,13 @@ export function sanitizeState(state) {
   Object.keys(safe.expeditions.meta.unlockedBands).forEach((key) => {
     safe.expeditions.meta.unlockedBands[key] = Boolean(safe.expeditions.meta.unlockedBands[key]);
   });
+  const purchasedVoyages = safe.expeditions.meta.purchasedVoyages && typeof safe.expeditions.meta.purchasedVoyages === "object"
+    ? safe.expeditions.meta.purchasedVoyages
+    : {};
+  Object.keys(purchasedVoyages).forEach((key) => {
+    purchasedVoyages[key] = Boolean(purchasedVoyages[key]);
+  });
+  safe.expeditions.meta.purchasedVoyages = purchasedVoyages;
   const defaultShip = "raft";
   const shipIds = Object.keys(safe.expeditions.ships);
   if (typeof safe.expeditions.selectedShip !== "string" || !shipIds.includes(safe.expeditions.selectedShip)) {
@@ -353,6 +406,25 @@ export function sanitizeState(state) {
   Object.keys(safe.expeditions.blueprintInventory || {}).forEach((key) => {
     safe.expeditions.blueprintInventory[key] = Math.max(0, Math.floor(Number(safe.expeditions.blueprintInventory[key]) || 0));
   });
+  const rawMapInventory = safe.expeditions.mapInventory && typeof safe.expeditions.mapInventory === "object"
+    ? safe.expeditions.mapInventory
+    : {};
+  const normalizedMapInventory = {};
+  Object.entries(rawMapInventory).forEach(([mapId, rawCount]) => {
+    if (typeof mapId !== "string") {
+      return;
+    }
+    const id = mapId.trim();
+    if (!id) {
+      return;
+    }
+    const count = Math.max(0, Math.floor(Number(rawCount) || 0));
+    if (count <= 0) {
+      return;
+    }
+    normalizedMapInventory[id] = count;
+  });
+  safe.expeditions.mapInventory = normalizedMapInventory;
   safe.expeditions.partInventory = normalizePartInventoryMap(safe.expeditions.partInventory);
   safe.expeditions.meta.intel = Math.max(0, Number(safe.expeditions.meta.intel) || 0);
   safe.expeditions.meta.completedRuns = Math.max(0, Math.floor(Number(safe.expeditions.meta.completedRuns) || 0));
@@ -362,18 +434,6 @@ export function sanitizeState(state) {
   if (!allowedRouteModes.has(safe.expeditions.meta.autoRouteMode)) {
     safe.expeditions.meta.autoRouteMode = "manual";
   }
-  const pressure = safe.expeditions.meta.intelPressure && typeof safe.expeditions.meta.intelPressure === "object"
-    ? safe.expeditions.meta.intelPressure
-    : {};
-  Object.keys(pressure).forEach((bandId) => {
-    const entry = pressure[bandId] || {};
-    pressure[bandId] = {
-      stacks: Math.max(0, Math.floor(Number(entry.stacks) || 0)),
-      lastLaunchAt: Math.max(0, Math.floor(Number(entry.lastLaunchAt) || 0))
-    };
-  });
-  safe.expeditions.meta.intelPressure = pressure;
-
   const continuous = safe.expeditions.meta.continuous && typeof safe.expeditions.meta.continuous === "object"
     ? safe.expeditions.meta.continuous
     : {};
@@ -402,6 +462,57 @@ export function sanitizeState(state) {
     items: chestItems.slice(0, chestCapacity)
   };
 
+  const collection = safe.expeditions.collection && typeof safe.expeditions.collection === "object"
+    ? safe.expeditions.collection
+    : {};
+  const rawDiscovered = collection.discoveredItems && typeof collection.discoveredItems === "object"
+    ? collection.discoveredItems
+    : {};
+  const normalizedDiscovered = {};
+
+  Object.entries(rawDiscovered).forEach(([rawKey, rawValue]) => {
+    if (rawValue == null || rawValue === false) {
+      return;
+    }
+    const parsedKey = parseCollectionItemKey(rawKey);
+    const entry = rawValue && typeof rawValue === "object" ? rawValue : {};
+    const sourceId = typeof entry.sourceId === "string" && entry.sourceId.trim()
+      ? entry.sourceId.trim()
+      : (parsedKey?.sourceId || "expeditionRareDrops");
+    const itemId = typeof entry.itemId === "string" && entry.itemId.trim()
+      ? entry.itemId.trim()
+      : (parsedKey?.itemId || "");
+    const normalizedKey = createCollectionItemKey(sourceId, itemId);
+    if (!normalizedKey) {
+      return;
+    }
+    normalizedDiscovered[normalizedKey] = {
+      sourceId,
+      itemId,
+      name: typeof entry.name === "string" ? entry.name : "",
+      rarity: typeof entry.rarity === "string" ? entry.rarity : "",
+      discoveredAt: clampInt(entry.discoveredAt, 0)
+    };
+  });
+
+  const rawClaimed = collection.claimedMilestones && typeof collection.claimedMilestones === "object"
+    ? collection.claimedMilestones
+    : {};
+  const normalizedClaimed = {};
+  Object.keys(rawClaimed).forEach((milestoneId) => {
+    const cleanId = typeof milestoneId === "string" ? milestoneId.trim() : "";
+    if (!cleanId) {
+      return;
+    }
+    normalizedClaimed[cleanId] = Boolean(rawClaimed[milestoneId]);
+  });
+
+  safe.expeditions.collection = {
+    discoveredItems: normalizedDiscovered,
+    claimedMilestones: normalizedClaimed,
+    legacyBackfillDone: Boolean(collection.legacyBackfillDone)
+  };
+
   if (!safe.expeditions.activeRun || typeof safe.expeditions.activeRun !== "object") {
     safe.expeditions.activeRun = null;
   }
@@ -419,7 +530,7 @@ export function sanitizeState(state) {
   safe.perks.conversionCostFlatReduction = Math.max(0, Number(safe.perks.conversionCostFlatReduction) || 0);
   safe.perks.conversionRefundFraction = Math.max(0, Number(safe.perks.conversionRefundFraction) || 0);
   safe.perks.prestigeGainMultiplier = Math.max(1, Number(safe.perks.prestigeGainMultiplier) || 1);
-  safe.perks.generatorCostGrowthMultiplier = Math.max(0.7, Number(safe.perks.generatorCostGrowthMultiplier) || 1);
+  safe.perks.generatorCostGrowthMultiplier = Math.max(0.2, Number(safe.perks.generatorCostGrowthMultiplier) || 1);
   safe.perks.furnaceRateMultiplier = Math.max(0.1, Number(safe.perks.furnaceRateMultiplier) || 1);
   safe.perks.condenserRateMultiplier = Math.max(0.1, Number(safe.perks.condenserRateMultiplier) || 1);
   safe.perks.prismRateMultiplier = Math.max(0.1, Number(safe.perks.prismRateMultiplier) || 1);
@@ -432,6 +543,8 @@ export function sanitizeState(state) {
   safe.perks.expeditionShardBonus = Math.max(0, Number(safe.perks.expeditionShardBonus) || 0);
   safe.perks.expeditionIntelMultiplier = Math.max(0.25, Number(safe.perks.expeditionIntelMultiplier) || 1);
   safe.perks.partTierCapBonus = clampInt(safe.perks.partTierCapBonus, 0, 99);
+  safe.perks.facilityMaxLevelBonus = clampInt(safe.perks.facilityMaxLevelBonus, 0, 99);
+  safe.perks.rewardsChestCapacityBonus = clampInt(safe.perks.rewardsChestCapacityBonus, 0, 999);
 
   return safe;
 }

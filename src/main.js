@@ -60,7 +60,8 @@ systems.expeditions = createExpeditionSystem({
   resourceManager,
   eventBus,
   balance: BALANCE,
-  shipSystem: systems.ships
+  shipSystem: systems.ships,
+  recompute
 });
 systems.actions = createProgressionActions({ state, resourceManager, eventBus, recompute, expeditionSystem: systems.expeditions });
 
@@ -79,6 +80,14 @@ function roundMetric(value, digits = 2) {
   }
   const factor = Math.pow(10, digits);
   return Math.round(n * factor) / factor;
+}
+
+function formatIntOrFixed(value, digits = 2) {
+  const rounded = roundMetric(value, digits);
+  if (Number.isInteger(rounded)) {
+    return String(rounded);
+  }
+  return rounded.toFixed(digits);
 }
 
 function resourceSnapshot() {
@@ -178,7 +187,7 @@ const offline = applyOfflineProgress(
 );
 if (offline.elapsedSeconds > 5) {
   renderer.setNotice(
-    `Offline gains: +${offline.matterGain.toFixed(1)} Matter, +${offline.fireGain.toFixed(1)} Fire.`,
+    `Offline gains: +${formatIntOrFixed(offline.matterGain)} Matter, +${formatIntOrFixed(offline.fireGain)} Fire.`,
     true
   );
 }
@@ -313,6 +322,10 @@ eventBus.on("expedition:continuousStopped", ({ reasonKey, reason }) => {
     return;
   }
   renderer.setNotice(`Expedition loop stopped: ${reason || "unknown reason"}.`, false);
+});
+
+eventBus.on("expedition:claim", ({ drops }) => {
+  renderer.showRareDropPopup(drops);
 });
 
 renderer.start();

@@ -542,39 +542,84 @@ export const ASCEND_TREE = [
   {
     id: "expeditionKeystone",
     name: "Expedition Keystone",
-    description: "Unlocks prestige expeditions and +10% expedition yield.",
-    cost: 18,
-    q: 3,
-    r: 2,
+    description: "Unlocks prestige expeditions.",
+    cost: 24,
+    q: 5,
+    r: 0,
     unlock: { type: "ascensions", value: 1 },
-    effect: { expeditionYieldMultiplier: 1.1 }
+    effect: {}
   },
   {
     id: "cartographerSpindle",
     name: "Cartographer Spindle",
-    description: "+12% expedition speed and +5% intel gain.",
-    cost: 20,
-    q: 4,
-    r: 2,
+    description: "+12% voyage speed and +5% intel gain.",
+    cost: 28,
+    q: 6,
+    r: 0,
     effect: { expeditionSpeedMultiplier: 1.12, expeditionIntelMultiplier: 1.05 }
   },
   {
     id: "hazardSeals",
     name: "Hazard Seals",
-    description: "Reduce expedition failure risk by 7%.",
-    cost: 22,
-    q: 5,
-    r: 1,
+    description: "Reduce voyage failure risk by 7%.",
+    cost: 32,
+    q: 7,
+    r: -1,
     effect: { expeditionRiskMitigation: 0.07 }
   },
   {
     id: "salvageVats",
     name: "Salvage Vats",
-    description: "+2 guaranteed shard salvage on expedition success.",
-    cost: 24,
-    q: 5,
+    description: "5% chance to salvage +1 shard on voyage success.",
+    cost: 36,
+    q: 8,
+    r: -1,
+    effect: { expeditionShardBonus: 0.05 }
+  },
+  {
+    id: "holdfastCoffers",
+    name: "Holdfast Coffers",
+    description: "+2 rewards chest capacity.",
+    cost: 31,
+    q: 6,
+    r: 1,
+    effect: { rewardsChestCapacityBonus: 2 }
+  },
+  {
+    id: "dockwrightTenets",
+    name: "Dockwright Tenets",
+    description: "+1 max level on ship facilities.",
+    cost: 34,
+    q: 7,
     r: 0,
-    effect: { expeditionShardBonus: 2 }
+    effect: { facilityMaxLevelBonus: 1 }
+  },
+  {
+    id: "voidLockers",
+    name: "Void Lockers",
+    description: "+3 rewards chest capacity.",
+    cost: 38,
+    q: 7,
+    r: 1,
+    effect: { rewardsChestCapacityBonus: 3 }
+  },
+  {
+    id: "fleetFoundries",
+    name: "Fleet Foundries",
+    description: "+1 max level on ship facilities.",
+    cost: 41,
+    q: 8,
+    r: 0,
+    effect: { facilityMaxLevelBonus: 1 }
+  },
+  {
+    id: "alloyInfusion",
+    name: "Alloy Infusion",
+    description: "+1 max tier for ship parts.",
+    cost: 45,
+    q: 9,
+    r: 0,
+    effect: { partTierCapBonus: 1 }
   },
   {
     id: "novaLoom",
