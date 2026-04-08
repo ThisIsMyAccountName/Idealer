@@ -540,6 +540,79 @@ export const ASCEND_TREE = [
     effect: { productionMultiplier: 1.06 }
   },
   {
+    id: "labyrinthKeystone",
+    name: "Leyline Labyrinth Keystone",
+    description: "Unlocks the Leyline Labyrinth system.",
+    cost: 26,
+    q: -5,
+    r: 4,
+    unlock: { type: "ascensionNode", value: "glyphNexus" },
+    effect: {}
+  },
+  {
+    id: "routeEtcher",
+    name: "Route Etcher",
+    description: "Placeholder node for labyrinth route upgrades.",
+    cost: 30,
+    q: -6,
+    r: 4,
+    effect: {}
+  },
+  {
+    id: "echoCompass",
+    name: "Echo Compass",
+    description: "Placeholder node for labyrinth scouting upgrades.",
+    cost: 34,
+    q: -6,
+    r: 5,
+    effect: {}
+  },
+  {
+    id: "threadAnchors",
+    name: "Thread Anchors",
+    description: "Placeholder node for labyrinth stability upgrades.",
+    cost: 37,
+    q: -5,
+    r: 5,
+    effect: {}
+  },
+  {
+    id: "faultLantern",
+    name: "Fault Lantern",
+    description: "Placeholder node for labyrinth hazard upgrades.",
+    cost: 41,
+    q: -7,
+    r: 5,
+    effect: {}
+  },
+  {
+    id: "mazeArchive",
+    name: "Maze Archive",
+    description: "Placeholder node for labyrinth archive upgrades.",
+    cost: 44,
+    q: -6,
+    r: 6,
+    effect: {}
+  },
+  {
+    id: "pathEngine",
+    name: "Path Engine",
+    description: "Placeholder node for labyrinth throughput upgrades.",
+    cost: 48,
+    q: -5,
+    r: 6,
+    effect: {}
+  },
+  {
+    id: "deepCartography",
+    name: "Deep Cartography",
+    description: "Placeholder node for labyrinth depth upgrades.",
+    cost: 52,
+    q: -7,
+    r: 6,
+    effect: {}
+  },
+  {
     id: "expeditionKeystone",
     name: "Expedition Keystone",
     description: "Unlocks prestige expeditions.",

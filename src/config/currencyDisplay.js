@@ -23,6 +23,14 @@ export const CURRENCY_DISPLAY = {
     iconPath: "assets/icons/currencies/intel.png",
     alt: "Intel icon"
   },
+  glyphDust: {
+    id: "glyphDust",
+    label: "Glyph Dust",
+    cardFallback: "GLY",
+    inlineFallback: "G",
+    iconPath: "assets/icons/currencies/glyph-dust.png",
+    alt: "Glyph Dust icon"
+  },
   shards: {
     id: "shards",
     label: "Shards",

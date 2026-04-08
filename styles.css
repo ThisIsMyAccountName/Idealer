@@ -331,6 +331,21 @@ h1 {
   background: rgba(224, 237, 253, 0.94);
 }
 
+.resource-card--glyphdust {
+  --card-pattern:
+    radial-gradient(circle at 16% 18%, rgba(74, 71, 164, 0.22), transparent 46%),
+    radial-gradient(circle at 88% 0%, rgba(74, 71, 164, 0.12), transparent 44%);
+  --card-stripe: linear-gradient(90deg, rgba(74, 71, 164, 0.95), rgba(178, 170, 247, 0.8));
+  border-color: rgba(74, 71, 164, 0.42);
+  box-shadow: 0 12px 24px rgba(74, 71, 164, 0.16);
+}
+
+.resource-card--glyphdust .card-icon {
+  border-color: rgba(74, 71, 164, 0.42);
+  color: #363376;
+  background: rgba(232, 230, 255, 0.94);
+}
+
 .resource-card--chest {
   --card-pattern:
     radial-gradient(circle at 16% 18%, rgba(153, 114, 46, 0.2), transparent 48%),
@@ -427,6 +442,10 @@ h1 {
 }
 
 .main-grid.expeditions-mode #dynamic-panel {
+  min-height: 520px;
+}
+
+.main-grid.labyrinth-mode #dynamic-panel {
   min-height: 520px;
 }
 
@@ -565,6 +584,34 @@ h1 {
   animation: none;
 }
 
+.hex-node[data-action="ascend:labyrinthKeystone"] {
+  background: linear-gradient(155deg, #2b1948 0%, #44307a 56%, #5d47a9 100%);
+  border-color: #8a77cf;
+  color: #f8f3ff;
+  box-shadow: 0 0 0 1px rgba(189, 174, 244, 0.32), 0 10px 22px rgba(34, 21, 62, 0.42);
+  animation: keystoneVioletPulse 2.8s ease-in-out infinite;
+}
+
+.hex-node[data-action="ascend:labyrinthKeystone"] .hex-meta {
+  color: rgba(238, 231, 255, 0.9);
+}
+
+.hex-node.owned[data-action="ascend:labyrinthKeystone"] {
+  background: linear-gradient(155deg, #3b2470 0%, #593ca0 60%, #7258bf 100%);
+  border-color: #b8a7ea;
+  color: #faf6ff;
+  box-shadow: 0 0 0 1px rgba(205, 192, 246, 0.38), 0 10px 22px rgba(37, 24, 67, 0.45);
+}
+
+.hex-node.locked[data-action="ascend:labyrinthKeystone"] {
+  opacity: 0.72;
+  background: linear-gradient(155deg, #372f4c 0%, #4a4069 56%, #5d4f83 100%);
+  border-color: #8a7aab;
+  color: #d9d0ed;
+  box-shadow: 0 7px 16px rgba(30, 20, 48, 0.34);
+  animation: none;
+}
+
 @keyframes keystoneNavyPulse {
   0% {
     filter: brightness(0.95);
@@ -577,6 +624,21 @@ h1 {
   100% {
     filter: brightness(0.95);
     box-shadow: 0 0 0 1px rgba(149, 191, 235, 0.3), 0 8px 20px rgba(10, 24, 49, 0.38), 0 0 0 rgba(62, 124, 198, 0);
+  }
+}
+
+@keyframes keystoneVioletPulse {
+  0% {
+    filter: brightness(0.96);
+    box-shadow: 0 0 0 1px rgba(189, 174, 244, 0.28), 0 8px 20px rgba(34, 21, 62, 0.38), 0 0 0 rgba(125, 92, 214, 0);
+  }
+  50% {
+    filter: brightness(1.1);
+    box-shadow: 0 0 0 1px rgba(211, 201, 250, 0.56), 0 12px 28px rgba(40, 25, 74, 0.5), 0 0 20px rgba(142, 114, 224, 0.36);
+  }
+  100% {
+    filter: brightness(0.96);
+    box-shadow: 0 0 0 1px rgba(189, 174, 244, 0.28), 0 8px 20px rgba(34, 21, 62, 0.38), 0 0 0 rgba(125, 92, 214, 0);
   }
 }
 
@@ -802,6 +864,203 @@ h1 {
   background: #f3ecdd;
   border-color: #d8c8ad;
   color: #7a664a;
+}
+
+.labyrinth-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.labyrinth-intro,
+.labyrinth-rewards,
+.labyrinth-active {
+  border-radius: 12px;
+  margin-bottom: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.labyrinth-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.labyrinth-rewards-head,
+.labyrinth-active-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.labyrinth-rewards-head h3,
+.labyrinth-active-head h3 {
+  margin: 0;
+}
+
+.labyrinth-reward-line {
+  font-size: 0.84rem;
+  color: #5f513a;
+  line-height: 1.35;
+}
+
+.labyrinth-drop-list {
+  border: 1px dashed #e3d6bc;
+  border-radius: 10px;
+  background: #fffef8;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.labyrinth-drop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: #433726;
+}
+
+.labyrinth-progress-wrap {
+  display: grid;
+  gap: 5px;
+}
+
+.labyrinth-progress {
+  height: 11px;
+}
+
+.lab-choice-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lab-choice-card {
+  border: 1px dashed #e0d1b5;
+  border-radius: 10px;
+  background: #fffcf4;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.labyrinth-board {
+  margin-top: 4px;
+  border: 1px solid #e5d9c1;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #fffdf6 0%, #f8f1e3 100%);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.lab-depth-column {
+  border: 1px dashed #dfcfb0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.lab-depth-column h4 {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #715f44;
+}
+
+.lab-depth-nodes {
+  display: grid;
+  gap: 6px;
+}
+
+.lab-node {
+  border: 1px solid #dfcfb0;
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+
+button.lab-node {
+  cursor: pointer;
+}
+
+.lab-node-title {
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.lab-node-type,
+.lab-node-meta {
+  font-size: 0.72rem;
+  color: #6f614a;
+}
+
+.lab-node-reward {
+  font-size: 0.74rem;
+  color: #4e4232;
+  line-height: 1.3;
+}
+
+.lab-node.is-reachable {
+  border-color: #3f8f7d;
+  box-shadow: 0 0 0 1px rgba(63, 143, 125, 0.2);
+}
+
+.lab-node.is-pending {
+  border-color: #c88b2f;
+  background: #fff7ea;
+}
+
+.lab-node.is-resolved {
+  border-color: #6ca163;
+  background: #f3faef;
+}
+
+.lab-node.is-locked {
+  opacity: 0.72;
+}
+
+.labyrinth-history {
+  border: 1px dashed #dfcfb0;
+  border-radius: 10px;
+  padding: 8px;
+  background: #fffaf0;
+}
+
+.labyrinth-history summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #6a5a40;
+}
+
+.labyrinth-history-list {
+  margin-top: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.lab-path-row {
+  border-bottom: 1px dashed #eadfc8;
+  padding-bottom: 6px;
+  display: grid;
+  gap: 3px;
+}
+
+.lab-path-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .expedition-progress {
@@ -1714,6 +1973,10 @@ button:disabled {
     flex-direction: column;
   }
 
+  .labyrinth-board {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  }
+
   .main-grid {
     grid-template-columns: 1fr;
   }
@@ -1772,5 +2035,14 @@ button:disabled {
   .collection-item {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .lab-choice-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .labyrinth-board {
+    grid-template-columns: 1fr;
   }
 }

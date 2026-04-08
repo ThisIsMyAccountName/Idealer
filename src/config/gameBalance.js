@@ -1,3 +1,54 @@
+const LABYRINTH_COLLECTIBLES = [
+  {
+    id: "relic:cipher-driftglass",
+    name: "Cipher Driftglass",
+    rarity: "semi-rare",
+    weight: 20
+  },
+  {
+    id: "relic:threaded-astrolabe",
+    name: "Threaded Astrolabe",
+    rarity: "rare",
+    weight: 15
+  },
+  {
+    id: "relic:fracture-loom",
+    name: "Fracture Loom",
+    rarity: "rare",
+    weight: 13
+  },
+  {
+    id: "relic:anchor-sigil",
+    name: "Anchor Sigil",
+    rarity: "rare",
+    weight: 12
+  },
+  {
+    id: "relic:echo-ribbon",
+    name: "Echo Ribbon",
+    rarity: "epic",
+    weight: 8
+  },
+  {
+    id: "relic:maze-crown",
+    name: "Maze Crown",
+    rarity: "epic",
+    weight: 7
+  },
+  {
+    id: "relic:deep-atlas-shard",
+    name: "Deep Atlas Shard",
+    rarity: "legendary",
+    weight: 3
+  },
+  {
+    id: "relic:zero-point-lantern",
+    name: "Zero Point Lantern",
+    rarity: "legendary",
+    weight: 2
+  }
+];
+
 export const BALANCE = {
   tickMs: 100,
   minRenderIntervalMs: 80,
@@ -669,7 +720,21 @@ export const BALANCE = {
       expeditionRareDrops: {
         name: "Expedition Rare Drops",
         description: "Track every rare blueprint and ship part recovered from voyages.",
+        iconFolder: "expedition-items",
+        unknownIconPath: "assets/icons/expedition-items/unknown.png",
         autoFromRareDrops: true
+      },
+      labyrinthRelics: {
+        name: "Leyline Relics",
+        description: "Relics surfaced while tracing the Leyline Labyrinth.",
+        iconFolder: "labyrinth-items",
+        unknownIconPath: "assets/icons/labyrinth-items/unknown.png",
+        autoFromRareDrops: false,
+        items: LABYRINTH_COLLECTIBLES.map((item) => ({
+          id: item.id,
+          name: item.name,
+          rarity: item.rarity
+        }))
       }
     },
     collectionMilestones: [
@@ -1553,6 +1618,94 @@ export const BALANCE = {
           cataclysm: ["titan-remnant", "collapse-fathom"]
         }
       }
+    ]
+  },
+  labyrinth: {
+    unlockNodeId: "labyrinthKeystone",
+    currencyId: "glyphDust",
+    collectionSourceId: "labyrinthRelics",
+    offlineProgressMultiplier: 0.6,
+    generation: {
+      minDepth: 5,
+      maxDepth: 7,
+      minBranches: 2,
+      maxBranches: 3,
+      minConnections: 1,
+      maxConnections: 2
+    },
+    rewards: {
+      base: {
+        matter: 1800,
+        fire: 24,
+        glyphDust: 3
+      },
+      perDepth: {
+        matter: 920,
+        fire: 18,
+        glyphDust: 2
+      },
+      varianceMin: 0.8,
+      varianceMax: 1.26,
+      durationSeconds: {
+        base: 6,
+        perDepth: 1.2,
+        min: 3.5,
+        max: 19
+      }
+    },
+    collectibleChanceBase: 0.05,
+    collectibleChancePerDepth: 0.015,
+    nodeTypes: {
+      stable: {
+        label: "Stable Thread",
+        weight: 30,
+        rewardMultiplier: 0.94,
+        durationMultiplier: 0.88,
+        riskDelta: -0.02,
+        collectibleChanceBonus: 0
+      },
+      surge: {
+        label: "Surge Channel",
+        weight: 24,
+        rewardMultiplier: 1.08,
+        durationMultiplier: 1,
+        riskDelta: 0.02,
+        collectibleChanceBonus: 0.01
+      },
+      cache: {
+        label: "Cache Pocket",
+        weight: 20,
+        rewardMultiplier: 1.18,
+        durationMultiplier: 1.05,
+        riskDelta: 0.03,
+        collectibleChanceBonus: 0.02
+      },
+      relic: {
+        label: "Relic Vault",
+        weight: 14,
+        rewardMultiplier: 1.02,
+        durationMultiplier: 1.12,
+        riskDelta: 0.04,
+        collectibleChanceBonus: 0.08
+      },
+      hazard: {
+        label: "Fault Crossing",
+        weight: 12,
+        rewardMultiplier: 1.34,
+        durationMultiplier: 1.2,
+        riskDelta: 0.08,
+        collectibleChanceBonus: 0.03
+      }
+    },
+    collectibles: LABYRINTH_COLLECTIBLES,
+    placeholderNodeIds: [
+      "routeEtcher",
+      "echoCompass",
+      "threadAnchors",
+      "faultLantern",
+      "mazeArchive",
+      "pathEngine",
+      "deepCartography"
     ]
   },
   upgradePower: 10,

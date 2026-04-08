@@ -2,7 +2,7 @@ import { ascendCost, ascendShardGainFromResources, generatorCost } from "../engi
 import { researchCost } from "../game/researchSystem.js";
 
 const VIEW_STATE_STORAGE_PREFIX = "dimensionalAlchemy.viewState";
-const VALID_MAIN_TABS = new Set(["upgrades", "research", "expeditions", "collection", "ascend"]);
+const VALID_MAIN_TABS = new Set(["upgrades", "research", "expeditions", "labyrinth", "collection", "ascend"]);
 const VALID_EXPEDITION_VIEWS = new Set(["runs", "fleet", "ship"]);
 
 function formatIntOrFixed(value, digits = 2) {
@@ -246,10 +246,12 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     rareDropPopupId: 0,
     rareDropTableState: {},
     lastExpeditionSignature: "",
+    lastLabyrinthSignature: "",
     scrollPositions: {
       upgrades: 0,
       research: 0,
       expeditions: 0,
+      labyrinth: 0,
       collection: 0
     }
   };
@@ -677,6 +679,10 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     return Boolean(systems.expeditions.getStatus().unlocked);
   }
 
+  function isLabyrinthUnlocked() {
+    return Boolean(systems.labyrinth?.getStatus?.().unlocked);
+  }
+
   function getNextUpgradeText() {
     const unlockedUpgradeIds = balance.upgradeOrder.filter((id) => systems.upgrades.isUnlocked(id));
     const nextUpgradeId = unlockedUpgradeIds.find((id) => {
@@ -792,6 +798,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
 
   function buildLayout() {
     const expeditionUnlocked = isExpeditionUnlocked();
+    const labyrinthUnlocked = isLabyrinthUnlocked();
     const slotOptions = saveSlots
       ? saveSlots.slots
           .map((slot) => {
@@ -849,6 +856,15 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
             <div class="hint" id="intel-hint">${expeditionUnlocked ? "Runs and ship upgrades" : "Unlock Expedition Keystone"}</div>
             <div class="action"><button class="secondary" data-action="tab:expeditions" id="intel-open" ${expeditionUnlocked ? "" : "disabled"}>Expeditions</button></div>
           </div>
+          <div class="resource-card resource-card--glyphdust ${labyrinthUnlocked ? "" : "is-locked"}" data-resource="glyphDust" id="glyphdust-card">
+            <div class="card-title">
+              ${renderCurrencyIcon("glyphDust", "card")}
+              <div class="label">Glyph Dust</div>
+            </div>
+            <div class="value" id="glyphdust-value">0</div>
+            <div class="hint" id="glyphdust-hint">${labyrinthUnlocked ? "Leyline trace catalyst" : "Unlock Leyline Labyrinth Keystone"}</div>
+            <div class="action"><button class="secondary" data-action="tab:labyrinth" id="glyphdust-open" ${labyrinthUnlocked ? "" : "disabled"}>Labyrinth</button></div>
+          </div>
           <div class="resource-card resource-card--ascend" data-resource="shards">
             <div class="card-title">
               ${renderCurrencyIcon("shards", "card")}
@@ -865,6 +881,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         ${actionButton("Upgrades", "ghost tab", "tab:upgrades")}
         ${actionButton("Research", "ghost tab", "tab:research")}
         ${actionButton("Expeditions", "ghost tab", "tab:expeditions", !expeditionUnlocked)}
+        ${actionButton("Labyrinth", "ghost tab", "tab:labyrinth", !labyrinthUnlocked)}
         ${actionButton("Collection", "ghost tab", "tab:collection")}
         ${actionButton("Ascend", "ghost tab", "tab:ascend")}
       </section>
@@ -884,10 +901,15 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     refs.fire = appEl.querySelector("#fire-value");
     refs.shards = appEl.querySelector("#shards-value");
     refs.intel = appEl.querySelector("#intel-value");
+    refs.glyphDust = appEl.querySelector("#glyphdust-value");
     refs.intelCard = appEl.querySelector("#intel-card");
     refs.intelHint = appEl.querySelector("#intel-hint");
     refs.intelAction = appEl.querySelector("#intel-open");
+    refs.glyphDustCard = appEl.querySelector("#glyphdust-card");
+    refs.glyphDustHint = appEl.querySelector("#glyphdust-hint");
+    refs.glyphDustAction = appEl.querySelector("#glyphdust-open");
     refs.expeditionsTab = appEl.querySelector('button[data-action="tab:expeditions"]');
+    refs.labyrinthTab = appEl.querySelector('button[data-action="tab:labyrinth"]');
     refs.mainGrid = appEl.querySelector("#main-grid");
     refs.rarePopupStack = appEl.querySelector("#rare-popup-stack");
     ui.pinnedEl = appEl.querySelector("#pinned-panel");
@@ -1136,6 +1158,12 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         const sourceTotal = Math.max(0, Number(source.totalItems) || 0);
         const sourceDiscovered = Math.max(0, Number(source.discoveredCount) || 0);
         const sourcePercent = sourceTotal > 0 ? clamp((sourceDiscovered / sourceTotal) * 100, 0, 100) : 0;
+        const sourceIconFolder = typeof source.iconFolder === "string" && source.iconFolder.trim()
+          ? source.iconFolder.trim()
+          : "expedition-items";
+        const unknownIconPath = typeof source.unknownIconPath === "string" && source.unknownIconPath.trim()
+          ? source.unknownIconPath.trim()
+          : `assets/icons/${sourceIconFolder}/unknown.png`;
         const items = (source.items || [])
           .map((item, index) => {
             const discovered = Boolean(item.discovered);
@@ -1145,13 +1173,18 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
             const nameToken = discovered
               ? (item.discoveredName || item.name || item.id)
               : `Unknown Relic #${index + 1}`;
+            const iconPath = `assets/icons/${sourceIconFolder}/${toIconSlug(item.id || nameToken)}.png`;
             const iconMarkup = discovered
-              ? renderExpeditionItemIcon(item.id || nameToken, { label: nameToken, variant: "collection" })
+              ? renderExpeditionItemIcon(item.id || nameToken, {
+                label: nameToken,
+                variant: "collection",
+                iconPath
+              })
               : renderExpeditionItemIcon("unknown", {
                 label: "Unknown Relic",
                 fallback: "?",
                 variant: "collection",
-                iconPath: "assets/icons/expedition-items/unknown.png"
+                iconPath: unknownIconPath
               });
             const classNames = ["collection-item"];
             if (discovered) {
@@ -1812,6 +1845,226 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     `;
   }
 
+  function renderLabyrinthLockedPanel() {
+    return `
+      <h2>Leyline Labyrinth</h2>
+      <div class="muted">Unlock <strong>Leyline Labyrinth Keystone</strong> in Ascend to open path puzzles and relic traces.</div>
+      <div class="row">
+        <div class="kv">Labyrinth routes are gated until the keystone is owned.</div>
+        ${actionButton("Go to Ascend", "secondary", "tab:ascend")}
+      </div>
+    `;
+  }
+
+  function formatLabyrinthRewardSummary(rewards, currencyId = "glyphDust") {
+    const safeRewards = rewards && typeof rewards === "object" ? rewards : {};
+    const parts = [];
+    if ((safeRewards.matter || 0) > 0) {
+      parts.push(formatCurrencyAmount("matter", safeRewards.matter, { showPositiveSign: true }));
+    }
+    if ((safeRewards.fire || 0) > 0) {
+      parts.push(formatCurrencyAmount("fire", safeRewards.fire, { showPositiveSign: true }));
+    }
+    if ((safeRewards[currencyId] || 0) > 0) {
+      parts.push(formatCurrencyAmount(currencyId, safeRewards[currencyId], { showPositiveSign: true }));
+    }
+    if ((safeRewards.shards || 0) > 0) {
+      parts.push(formatCurrencyAmount("shards", safeRewards.shards, { showPositiveSign: true }));
+    }
+    return parts.length > 0 ? parts.join(" | ") : "No rewards.";
+  }
+
+  function renderLabyrinthPanel() {
+    const status = systems.labyrinth?.getStatus?.() || {
+      unlocked: false,
+      currencyId: "glyphDust",
+      meta: {},
+      activePuzzle: null,
+      pendingRewards: null
+    };
+
+    if (!status.unlocked) {
+      return renderLabyrinthLockedPanel();
+    }
+
+    const currencyId = status.currencyId || "glyphDust";
+    const meta = status.meta || {};
+    const activePuzzle = status.activePuzzle;
+    const pendingRewards = status.pendingRewards;
+    const completedPuzzles = Math.max(0, Number(meta.completedPuzzles) || 0);
+    const bestDepth = Math.max(0, Number(meta.bestDepth) || 0);
+    const totalNodesResolved = Math.max(0, Number(meta.totalNodesResolved) || 0);
+    const totalDust = Math.max(0, Number(meta.totalGlyphDustEarned) || 0);
+
+    const pendingSection = pendingRewards
+      ? `
+        <section class="labyrinth-rewards panel">
+          <div class="labyrinth-rewards-head">
+            <h3>Awaiting Claim</h3>
+            <div class="kv">Depth ${Math.max(0, Number(pendingRewards.depthCount) || 0)} clear</div>
+          </div>
+          <div class="labyrinth-reward-line">${formatLabyrinthRewardSummary(pendingRewards.rewards, currencyId)}</div>
+          <div class="labyrinth-drop-list">
+            ${(pendingRewards.relicDrops || [])
+              .map((drop) => `<div class="labyrinth-drop-row">${renderExpeditionItemIcon(drop.id || drop.name, {
+                label: drop.name,
+                iconPath: `assets/icons/labyrinth-items/${toIconSlug(drop.id || drop.name)}.png`,
+                variant: "collection"
+              })}<span>${drop.name}</span><span class="chip chip--rarity">${toTitleToken(drop.rarity || "rare")}</span></div>`)
+              .join("") || "<div class=\"kv\">No relic drops from this run.</div>"}
+          </div>
+          <div class="labyrinth-actions">
+            ${actionButton("Claim Rewards", "secondary", "labyrinth:claim")}
+          </div>
+        </section>
+      `
+      : "";
+
+    const idleSection = !activePuzzle && !pendingRewards
+      ? `
+        <section class="labyrinth-intro panel">
+          <h3>Trace A New Route</h3>
+          <div class="kv">Generate a fresh procedural puzzle, pick one thread per depth, and stabilize each node to bank rewards.</div>
+          <div class="labyrinth-actions">${actionButton("Generate Puzzle", "secondary", "labyrinth:start")}</div>
+        </section>
+      `
+      : "";
+
+    let activeSection = "";
+    if (activePuzzle) {
+      const pendingNode = activePuzzle.pendingNode;
+      const pendingProgress = pendingNode
+        ? clamp(
+          pendingNode.durationSeconds > 0
+            ? (pendingNode.elapsedSeconds / pendingNode.durationSeconds) * 100
+            : 100,
+          0,
+          100
+        )
+        : 0;
+
+      const boardColumns = (activePuzzle.board || [])
+        .map((depthColumn) => {
+          const depthLabel = `Depth ${depthColumn.depth + 1}`;
+          const nodeCards = (depthColumn.nodes || [])
+            .map((node) => {
+              const classNames = ["lab-node"];
+              if (node.resolved) {
+                classNames.push("is-resolved");
+              }
+              if (node.pending) {
+                classNames.push("is-pending");
+              }
+              if (node.reachable) {
+                classNames.push("is-reachable");
+              }
+              if (!node.reachable && !node.resolved && !node.pending) {
+                classNames.push("is-locked");
+              }
+
+              const rewardLine = formatLabyrinthRewardSummary(node.reward, currencyId);
+              const chanceText = `${formatPercent(node.collectibleChance || 0)} relic`;
+
+              if (node.reachable) {
+                return `
+                  <button class="${classNames.join(" ")}" data-action="labyrinth:choose:${encodeURIComponent(node.id)}">
+                    <div class="lab-node-title">${node.label}</div>
+                    <div class="lab-node-type">${toTitleToken(node.type)}</div>
+                    <div class="lab-node-reward">${rewardLine}</div>
+                    <div class="lab-node-meta">${formatDuration(node.durationSeconds || 0)} | ${chanceText}</div>
+                  </button>
+                `;
+              }
+
+              return `
+                <article class="${classNames.join(" ")}">
+                  <div class="lab-node-title">${node.label}</div>
+                  <div class="lab-node-type">${toTitleToken(node.type)}</div>
+                  <div class="lab-node-reward">${rewardLine}</div>
+                  <div class="lab-node-meta">${formatDuration(node.durationSeconds || 0)} | ${chanceText}</div>
+                </article>
+              `;
+            })
+            .join("");
+
+          return `
+            <section class="lab-depth-column">
+              <h4>${depthLabel}</h4>
+              <div class="lab-depth-nodes">${nodeCards}</div>
+            </section>
+          `;
+        })
+        .join("");
+
+      const routeChoices = !pendingNode
+        ? (activePuzzle.availableChoices || [])
+            .map((choice) => `
+              <article class="lab-choice-card">
+                <div>
+                  <div><strong>${choice.label}</strong></div>
+                  <div class="kv">${toTitleToken(choice.type)} | ${formatDuration(choice.durationSeconds || 0)} | ${formatPercent(choice.collectibleChance || 0)} relic</div>
+                  <div class="kv">${formatLabyrinthRewardSummary(choice.reward, currencyId)}</div>
+                </div>
+                ${actionButton("Trace", "secondary compact", `labyrinth:choose:${encodeURIComponent(choice.id)}`)}
+              </article>
+            `)
+            .join("")
+        : "";
+
+      const pathHistory = (activePuzzle.path || [])
+        .slice(-8)
+        .reverse()
+        .map((step) => {
+          const collectible = step.collectibleId
+            ? `<span class="chip">Relic: ${toTitleToken(step.collectibleId.split(":").pop())}</span>`
+            : "";
+          return `
+            <div class="lab-path-row">
+              <div><strong>D${step.depth + 1}</strong> ${step.label}</div>
+              <div class="kv">${formatLabyrinthRewardSummary(step.reward, currencyId)}</div>
+              <div class="chip-row">${collectible}</div>
+            </div>
+          `;
+        })
+        .join("");
+
+      activeSection = `
+        <section class="labyrinth-active panel">
+          <div class="labyrinth-active-head">
+            <h3>Active Puzzle</h3>
+            <div class="kv">Depth ${activePuzzle.currentDepth + 1}/${Math.max(1, activePuzzle.depthCount || 1)}</div>
+          </div>
+          <div class="labyrinth-progress-wrap">
+            <div class="collection-progress labyrinth-progress"><span id="labyrinth-pending-progress-fill" style="width:${pendingProgress.toFixed(1)}%"></span></div>
+            <div class="kv" id="labyrinth-pending-progress-text">${pendingNode ? `${formatDuration(pendingNode.remainingSeconds || 0)} remaining` : "Awaiting path choice"}</div>
+          </div>
+          <div class="labyrinth-reward-line">Session rewards: ${formatLabyrinthRewardSummary(activePuzzle.totalRewards, currencyId)}</div>
+          ${pendingNode
+            ? `<div class="labyrinth-actions">${actionButton("Resolve Thread", "ghost", "labyrinth:resolve", (pendingNode.remainingSeconds || 0) > 0)}</div>`
+            : `<div class="lab-choice-list">${routeChoices || "<div class=\"kv\">No reachable routes.</div>"}</div>`}
+          <div class="labyrinth-board">${boardColumns}</div>
+          <details class="labyrinth-history" open>
+            <summary>Route History</summary>
+            <div class="labyrinth-history-list">${pathHistory || "<div class=\"kv\">No nodes resolved yet.</div>"}</div>
+          </details>
+        </section>
+      `;
+    }
+
+    return `
+      <h2>Leyline Labyrinth</h2>
+      <div class="labyrinth-meta-row">
+        <span class="chip">Puzzles ${formatInt(completedPuzzles)}</span>
+        <span class="chip">Best Depth ${formatInt(bestDepth)}</span>
+        <span class="chip">Nodes Resolved ${formatInt(totalNodesResolved)}</span>
+        <span class="chip">${formatCurrencyAmount(currencyId, totalDust, { showPositiveSign: false })} banked</span>
+      </div>
+      ${pendingSection}
+      ${idleSection}
+      ${activeSection}
+    `;
+  }
+
   function renderTabPanel(rates) {
     if (ui.activeTab === "upgrades") {
       return renderUpgradesPanel();
@@ -1821,6 +2074,9 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
     if (ui.activeTab === "expeditions") {
       return renderExpeditionsPanel();
+    }
+    if (ui.activeTab === "labyrinth") {
+      return renderLabyrinthPanel();
     }
     if (ui.activeTab === "collection") {
       return renderCollectionPanel();
@@ -1842,9 +2098,11 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
   function renderPanel() {
     const rates = formulas.productionPerSecond(state, generatorDefs);
     const expeditionUnlocked = isExpeditionUnlocked();
+    const labyrinthUnlocked = isLabyrinthUnlocked();
     const isAscendTab = ui.activeTab === "ascend";
     const isExpeditionsTab = ui.activeTab === "expeditions" && expeditionUnlocked;
-    const isFullWidthTab = isAscendTab || isExpeditionsTab;
+    const isLabyrinthTab = ui.activeTab === "labyrinth" && labyrinthUnlocked;
+    const isFullWidthTab = isAscendTab || isExpeditionsTab || isLabyrinthTab;
     snapshotRareDropTableState();
     if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection")) {
       const currentScroll = ui.panelEl.querySelector(".scroll-panel");
@@ -1868,6 +2126,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     hydrateUiIcons(ui.panelEl);
     refs.mainGrid.classList.toggle("full-width-mode", isFullWidthTab);
     refs.mainGrid.classList.toggle("expeditions-mode", isExpeditionsTab);
+    refs.mainGrid.classList.toggle("labyrinth-mode", isLabyrinthTab);
     if (isAscendTab) {
       refs.mainGrid.classList.add("ascend-mode");
       setupAscendInteractions();
@@ -1875,6 +2134,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       refs.mainGrid.classList.remove("ascend-mode");
     }
     ui.lastExpeditionSignature = getExpeditionRenderSignature();
+    ui.lastLabyrinthSignature = getLabyrinthRenderSignature();
     persistCurrentViewState();
   }
 
@@ -1901,6 +2161,27 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       continuous.active ? 1 : 0,
       continuous.bandId || "",
       continuous.stopReason || ""
+    ].join("|");
+  }
+
+  function getLabyrinthRenderSignature() {
+    const status = systems.labyrinth?.getStatus?.() || {};
+    const activePuzzle = status.activePuzzle;
+    const pendingNode = activePuzzle?.pendingNode;
+    const pendingRewards = status.pendingRewards;
+    return [
+      status.unlocked ? 1 : 0,
+      activePuzzle ? 1 : 0,
+      activePuzzle?.id || "",
+      activePuzzle?.currentDepth ?? -1,
+      activePuzzle?.depthCount ?? -1,
+      activePuzzle?.path?.length ?? 0,
+      pendingNode?.nodeId || "",
+      Math.floor(Number(pendingNode?.elapsedSeconds) || 0),
+      Math.floor(Number(pendingNode?.durationSeconds) || 0),
+      pendingRewards ? 1 : 0,
+      pendingRewards?.completedAt ?? 0,
+      pendingRewards?.relicDrops?.length ?? 0
     ].join("|");
   }
 
@@ -1942,6 +2223,31 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     if (progressEl) {
       progressEl.style.width = `${Math.max(2, progress).toFixed(1)}%`;
     }
+  }
+
+  function refreshLabyrinthLiveState() {
+    if (ui.activeTab !== "labyrinth") {
+      return;
+    }
+    const status = systems.labyrinth?.getStatus?.();
+    const activePuzzle = status?.activePuzzle;
+    const pendingNode = activePuzzle?.pendingNode;
+    const fillEl = ui.panelEl.querySelector("#labyrinth-pending-progress-fill");
+    const textEl = ui.panelEl.querySelector("#labyrinth-pending-progress-text");
+    if (!fillEl || !textEl) {
+      return;
+    }
+    if (!pendingNode) {
+      fillEl.style.width = "0%";
+      textEl.textContent = "Awaiting path choice";
+      return;
+    }
+    const duration = Math.max(0.1, Number(pendingNode.durationSeconds) || 0);
+    const elapsed = Math.max(0, Number(pendingNode.elapsedSeconds) || 0);
+    const remaining = Math.max(0, duration - elapsed);
+    const progress = clamp((elapsed / duration) * 100, 0, 100);
+    fillEl.style.width = `${progress.toFixed(1)}%`;
+    textEl.textContent = remaining > 0 ? `${formatDuration(remaining)} remaining` : "Thread ready";
   }
 
   function setupAscendInteractions() {
@@ -2074,10 +2380,22 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         action === "tab:expeditions" ||
         action.startsWith("expedition:") ||
         action.startsWith("ship:");
+      const labyrinthActionRequested =
+        action === "tab:labyrinth" ||
+        action.startsWith("labyrinth:");
       if (!isExpeditionUnlocked() && expeditionActionRequested) {
         ui.expeditionsView = "runs";
         setNotice("Unlock Expedition Keystone in Ascend to access Expeditions.", false);
         if (action === "tab:expeditions") {
+          ui.activeTab = "ascend";
+          renderPanel();
+        }
+        refreshHud();
+        return;
+      }
+      if (!isLabyrinthUnlocked() && labyrinthActionRequested) {
+        setNotice("Unlock Leyline Labyrinth Keystone in Ascend to access the Labyrinth.", false);
+        if (action === "tab:labyrinth") {
           ui.activeTab = "ascend";
           renderPanel();
         }
@@ -2137,6 +2455,33 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         if (ui.activeTab === "expeditions" && !ui.expeditionsView) {
           ui.expeditionsView = "runs";
         }
+        renderPanel();
+      } else if (action === "labyrinth:start") {
+        const result = systems.labyrinth.startPuzzle();
+        setNotice(result.ok ? "Labyrinth puzzle generated." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("labyrinth:choose:")) {
+        const encodedNodeId = action.slice("labyrinth:choose:".length);
+        const nodeId = decodeURIComponent(encodedNodeId || "");
+        const result = systems.labyrinth.choosePath(nodeId);
+        const notice = result.ok
+          ? `Route selected: ${result.node?.label || "Thread"}.`
+          : result.reason;
+        setNotice(notice, result.ok);
+        renderPanel();
+      } else if (action === "labyrinth:resolve") {
+        const result = systems.labyrinth.resolveNode();
+        const notice = result.ok
+          ? (result.completed ? "Puzzle complete. Claim your rewards." : "Thread resolved.")
+          : result.reason;
+        setNotice(notice, result.ok);
+        renderPanel();
+      } else if (action === "labyrinth:claim") {
+        const result = systems.labyrinth.claimRewards();
+        const notice = result.ok
+          ? `Rewards claimed.${result.discoveries > 0 ? ` ${result.discoveries} new relic discovery${result.discoveries === 1 ? "" : "ies"}.` : ""}`
+          : result.reason;
+        setNotice(notice, result.ok);
         renderPanel();
       } else if (action.startsWith("expedition:view:")) {
         ui.expeditionsView = action.split(":")[2] || "runs";
@@ -2473,6 +2818,9 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     const ascendCostValues = ascendCost(state);
     const expeditionStatus = systems.expeditions.getStatus();
     const expeditionUnlocked = Boolean(expeditionStatus.unlocked);
+    const labyrinthStatus = systems.labyrinth?.getStatus?.() || { unlocked: false, currencyId: "glyphDust" };
+    const labyrinthUnlocked = Boolean(labyrinthStatus.unlocked);
+    const labyrinthCurrencyId = labyrinthStatus.currencyId || "glyphDust";
     const chest = expeditionStatus.rewardsChest || { capacity: 10, items: [] };
     const chestItems = Array.isArray(chest.items) ? chest.items : [];
     const chestCount = chestItems.length;
@@ -2480,6 +2828,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     refs.matter.textContent = formatNumber(state.resources.matter);
     refs.fire.textContent = formatNumber(state.resources.fire);
     refs.shards.textContent = formatNumber(state.resources.shards);
+    refs.glyphDust.textContent = formatNumber(state.resources[labyrinthCurrencyId] || 0);
     refs.intel.textContent = formatNumber(state.expeditions?.meta?.intel || 0);
     refs.prodInline.textContent = `x${formatIntOrFixed(state.perks.productionMultiplier)}`;
 
@@ -2489,9 +2838,19 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     if (refs.expeditionsTab) {
       refs.expeditionsTab.disabled = !expeditionUnlocked;
     }
+    refs.glyphDustCard.classList.toggle("is-locked", !labyrinthUnlocked);
+    refs.glyphDustHint.textContent = labyrinthUnlocked ? "Leyline trace catalyst" : "Unlock Leyline Labyrinth Keystone";
+    refs.glyphDustAction.disabled = !labyrinthUnlocked;
+    if (refs.labyrinthTab) {
+      refs.labyrinthTab.disabled = !labyrinthUnlocked;
+    }
     if (!expeditionUnlocked && ui.activeTab === "expeditions") {
       ui.activeTab = "ascend";
       ui.expeditionsView = "runs";
+      renderPanel();
+    }
+    if (!labyrinthUnlocked && ui.activeTab === "labyrinth") {
+      ui.activeTab = "ascend";
       renderPanel();
     }
 
@@ -2538,6 +2897,16 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         renderPanel();
       } else {
         refreshExpeditionLiveState();
+      }
+    }
+
+    if (ui.activeTab === "labyrinth") {
+      const nextSignature = getLabyrinthRenderSignature();
+      if (nextSignature !== ui.lastLabyrinthSignature) {
+        ui.lastLabyrinthSignature = nextSignature;
+        renderPanel();
+      } else {
+        refreshLabyrinthLiveState();
       }
     }
   }
