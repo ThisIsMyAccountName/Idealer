@@ -8,7 +8,6 @@ import { ASCEND_TREE } from "./config/ascendTree.js";
 import { createAscendTreeSystem } from "./game/ascendTreeSystem.js";
 import { createExpeditionSystem } from "./game/expeditionSystem.js";
 import { createGeneratorSystem } from "./game/generatorSystem.js";
-import { createLabyrinthSystem } from "./game/labyrinthSystem.js";
 import { recomputePerks } from "./game/modifiers.js";
 import { createProgressionActions } from "./game/progressionActions.js";
 import { createResearchSystem } from "./game/researchSystem.js";
@@ -55,8 +54,7 @@ const systems = {
   }),
   ascendTree: createAscendTreeSystem({ state, nodes: ASCEND_TREE, resourceManager, eventBus, recompute }),
   ships: createShipSystem({ state, balance: BALANCE, resourceManager, eventBus }),
-  expeditions: null,
-  labyrinth: null
+  expeditions: null
 };
 systems.expeditions = createExpeditionSystem({
   state,
@@ -66,21 +64,7 @@ systems.expeditions = createExpeditionSystem({
   shipSystem: systems.ships,
   recompute
 });
-systems.labyrinth = createLabyrinthSystem({
-  state,
-  resourceManager,
-  eventBus,
-  balance: BALANCE,
-  registerCollectionDiscovery: systems.expeditions.registerCollectionDiscovery
-});
-systems.actions = createProgressionActions({
-  state,
-  resourceManager,
-  eventBus,
-  recompute,
-  expeditionSystem: systems.expeditions,
-  labyrinthSystem: systems.labyrinth
-});
+systems.actions = createProgressionActions({ state, resourceManager, eventBus, recompute, expeditionSystem: systems.expeditions });
 
 const DEBUG_TICK_SAMPLE_EVERY = 10;
 const TRANSMUTE_LOG_SAMPLE_EVERY = 20;
@@ -111,8 +95,7 @@ function resourceSnapshot() {
   return {
     matter: roundMetric(state.resources.matter, 2),
     fire: roundMetric(state.resources.fire, 2),
-    shards: roundMetric(state.resources.shards, 2),
-    glyphDust: roundMetric(state.resources.glyphDust, 2)
+    shards: roundMetric(state.resources.shards, 2)
   };
 }
 
@@ -202,7 +185,6 @@ const offline = applyOfflineProgress(
   formulas,
   (elapsedSeconds) => {
     systems.expeditions.advance(elapsedSeconds, BALANCE.expeditions?.offlineProgressMultiplier || 0.5);
-    systems.labyrinth.advance(elapsedSeconds, BALANCE.labyrinth?.offlineProgressMultiplier || 0.5);
   }
 );
 if (offline.elapsedSeconds > 5) {
@@ -220,7 +202,6 @@ const tickSystem = createTickSystem({
   eventBus,
   onAdvance: (dtSeconds) => {
     systems.expeditions.advance(dtSeconds, 1);
-    systems.labyrinth.advance(dtSeconds, 1);
   }
 });
 
@@ -347,26 +328,6 @@ eventBus.on("expedition:continuousStopped", ({ reasonKey, reason }) => {
 
 eventBus.on("expedition:claim", ({ drops }) => {
   renderer.showRareDropPopup(drops);
-});
-
-eventBus.on("labyrinth:complete", ({ relicDrops }) => {
-  const dropCount = Array.isArray(relicDrops) ? relicDrops.length : 0;
-  renderer.setNotice(
-    dropCount > 0
-      ? `Labyrinth route complete. ${dropCount} relic drop${dropCount === 1 ? "" : "s"} ready to claim.`
-      : "Labyrinth route complete. Rewards ready to claim.",
-    true
-  );
-});
-
-eventBus.on("labyrinth:claim", ({ discoveries }) => {
-  const discoveryCount = Math.max(0, Number(discoveries) || 0);
-  renderer.setNotice(
-    discoveryCount > 0
-      ? `Labyrinth rewards claimed. ${discoveryCount} new relic discover${discoveryCount === 1 ? "y" : "ies"}.`
-      : "Labyrinth rewards claimed.",
-    true
-  );
 });
 
 renderer.start();

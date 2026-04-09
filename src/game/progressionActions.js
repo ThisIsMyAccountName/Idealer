@@ -1,7 +1,7 @@
 import { BALANCE } from "../config/gameBalance.js";
 import { ascendCost, ascendShardGainFromResources } from "../engine/formulas.js";
 
-export function createProgressionActions({ state, resourceManager, eventBus, recompute, expeditionSystem, labyrinthSystem }) {
+export function createProgressionActions({ state, resourceManager, eventBus, recompute, expeditionSystem }) {
   function manualTransmute() {
     const base = BALANCE.baseClickMatter + state.perks.clickMatterBonus;
     let amount = base * state.perks.clickMultiplier;
@@ -54,9 +54,6 @@ export function createProgressionActions({ state, resourceManager, eventBus, rec
     state.research = {};
     if (expeditionSystem?.handleAscendReset) {
       expeditionSystem.handleAscendReset();
-    }
-    if (labyrinthSystem?.handleAscendReset) {
-      labyrinthSystem.handleAscendReset();
     }
     if (typeof recompute === "function") {
       recompute();

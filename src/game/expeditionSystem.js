@@ -135,32 +135,14 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
 
     function ensureSource(sourceId, sourceDef = {}) {
       if (!sourceMap.has(sourceId)) {
-        const iconFolder = typeof sourceDef.iconFolder === "string" && sourceDef.iconFolder.trim()
-          ? sourceDef.iconFolder.trim()
-          : "expedition-items";
-        const unknownIconPath = typeof sourceDef.unknownIconPath === "string" && sourceDef.unknownIconPath.trim()
-          ? sourceDef.unknownIconPath.trim()
-          : `assets/icons/${iconFolder}/unknown.png`;
         sourceMap.set(sourceId, {
           id: sourceId,
           name: typeof sourceDef.name === "string" && sourceDef.name.trim()
             ? sourceDef.name.trim()
             : toTitleToken(sourceId),
           description: typeof sourceDef.description === "string" ? sourceDef.description : "",
-          iconFolder,
-          unknownIconPath,
           items: {}
         });
-      } else {
-        const existing = sourceMap.get(sourceId);
-        if (existing) {
-          if (!existing.iconFolder && typeof sourceDef.iconFolder === "string" && sourceDef.iconFolder.trim()) {
-            existing.iconFolder = sourceDef.iconFolder.trim();
-          }
-          if (!existing.unknownIconPath && typeof sourceDef.unknownIconPath === "string" && sourceDef.unknownIconPath.trim()) {
-            existing.unknownIconPath = sourceDef.unknownIconPath.trim();
-          }
-        }
       }
       return sourceMap.get(sourceId);
     }
@@ -241,8 +223,6 @@ export function createExpeditionSystem({ state, resourceManager, eventBus, balan
           id: source.id,
           name: source.name,
           description: source.description,
-          iconFolder: source.iconFolder || "expedition-items",
-          unknownIconPath: source.unknownIconPath || `assets/icons/${source.iconFolder || "expedition-items"}/unknown.png`,
           items
         };
       })

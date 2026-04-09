@@ -172,8 +172,7 @@ export function createInitialState() {
     resources: {
       matter: 0,
       fire: 0,
-      shards: 0,
-      glyphDust: 0
+      shards: 0
     },
     lifetime: {
       matterSeen: 0,
@@ -286,17 +285,6 @@ export function createInitialState() {
       activeRun: null,
       pendingRewards: null
     },
-    labyrinth: {
-      meta: {
-        completedPuzzles: 0,
-        bestDepth: 0,
-        totalNodesResolved: 0,
-        totalGlyphDustEarned: 0
-      },
-      activePuzzle: null,
-      pendingRewards: null,
-      unlocks: {}
-    },
     perks: {
       productionMultiplier: 1,
       matterRateMultiplier: 1,
@@ -354,18 +342,6 @@ export function sanitizeState(state) {
     collection: {
       ...safe.expeditions.collection,
       ...(state.expeditions?.collection || {})
-    }
-  };
-  safe.labyrinth = {
-    ...safe.labyrinth,
-    ...(state.labyrinth || {}),
-    meta: {
-      ...safe.labyrinth.meta,
-      ...(state.labyrinth?.meta || {})
-    },
-    unlocks: {
-      ...safe.labyrinth.unlocks,
-      ...(state.labyrinth?.unlocks || {})
     }
   };
   safe.perks = { ...safe.perks, ...(state.perks || {}) };
@@ -536,31 +512,6 @@ export function sanitizeState(state) {
     claimedMilestones: normalizedClaimed,
     legacyBackfillDone: Boolean(collection.legacyBackfillDone)
   };
-
-  safe.labyrinth.meta.completedPuzzles = clampInt(safe.labyrinth.meta.completedPuzzles, 0);
-  safe.labyrinth.meta.bestDepth = clampInt(safe.labyrinth.meta.bestDepth, 0);
-  safe.labyrinth.meta.totalNodesResolved = clampInt(safe.labyrinth.meta.totalNodesResolved, 0);
-  safe.labyrinth.meta.totalGlyphDustEarned = clampInt(safe.labyrinth.meta.totalGlyphDustEarned, 0);
-
-  const rawLabyrinthUnlocks = safe.labyrinth.unlocks && typeof safe.labyrinth.unlocks === "object"
-    ? safe.labyrinth.unlocks
-    : {};
-  const normalizedLabyrinthUnlocks = {};
-  Object.keys(rawLabyrinthUnlocks).forEach((unlockId) => {
-    const cleanUnlockId = typeof unlockId === "string" ? unlockId.trim() : "";
-    if (!cleanUnlockId) {
-      return;
-    }
-    normalizedLabyrinthUnlocks[cleanUnlockId] = Boolean(rawLabyrinthUnlocks[unlockId]);
-  });
-  safe.labyrinth.unlocks = normalizedLabyrinthUnlocks;
-
-  safe.labyrinth.activePuzzle = safe.labyrinth.activePuzzle && typeof safe.labyrinth.activePuzzle === "object"
-    ? safe.labyrinth.activePuzzle
-    : null;
-  safe.labyrinth.pendingRewards = safe.labyrinth.pendingRewards && typeof safe.labyrinth.pendingRewards === "object"
-    ? safe.labyrinth.pendingRewards
-    : null;
 
   if (!safe.expeditions.activeRun || typeof safe.expeditions.activeRun !== "object") {
     safe.expeditions.activeRun = null;
