@@ -540,6 +540,61 @@ export const ASCEND_TREE = [
     effect: { productionMultiplier: 1.06 }
   },
   {
+    id: "riftDelveKeystone",
+    name: "Rift Delve Keystone",
+    description: "Unlocks Rift Delve room-crawls.",
+    cost: 26,
+    q: -3,
+    r: -2,
+    unlock: { type: "ascensions", value: 2 },
+    effect: {}
+  },
+  {
+    id: "lanternProtocol",
+    name: "Lantern Protocol",
+    description: "Rift Delve branch node.",
+    cost: 30,
+    q: -4,
+    r: -2,
+    effect: {}
+  },
+  {
+    id: "vaultFooting",
+    name: "Vault Footing",
+    description: "Rift Delve branch node.",
+    cost: 34,
+    q: -5,
+    r: -2,
+    effect: {}
+  },
+  {
+    id: "echoSurveyor",
+    name: "Echo Surveyor",
+    description: "Rift Delve branch node.",
+    cost: 38,
+    q: -5,
+    r: -1,
+    effect: {}
+  },
+  {
+    id: "catacombAtlas",
+    name: "Catacomb Atlas",
+    description: "Rift Delve branch node.",
+    cost: 42,
+    q: -4,
+    r: -3,
+    effect: {}
+  },
+  {
+    id: "graveCircuit",
+    name: "Grave Circuit",
+    description: "Rift Delve branch node.",
+    cost: 46,
+    q: -5,
+    r: -3,
+    effect: {}
+  },
+  {
     id: "expeditionKeystone",
     name: "Expedition Keystone",
     description: "Unlocks prestige expeditions.",

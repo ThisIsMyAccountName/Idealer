@@ -2,8 +2,14 @@ import { ascendCost, ascendShardGainFromResources, generatorCost } from "../engi
 import { researchCost } from "../game/researchSystem.js";
 
 const VIEW_STATE_STORAGE_PREFIX = "dimensionalAlchemy.viewState";
-const VALID_MAIN_TABS = new Set(["upgrades", "research", "expeditions", "collection", "ascend"]);
+const VALID_MAIN_TABS = new Set(["upgrades", "research", "expeditions", "collection", "dungeons", "ascend"]);
 const VALID_EXPEDITION_VIEWS = new Set(["runs", "fleet", "ship"]);
+const DUNGEON_DIRECTION_LABELS = {
+  north: "North",
+  east: "East",
+  south: "South",
+  west: "West"
+};
 
 function formatIntOrFixed(value, digits = 2) {
   const numeric = Number(value);
@@ -84,6 +90,15 @@ function toTitleToken(value) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function buildViewStateStorageKey(activeSlotId = "default") {
@@ -220,7 +235,7 @@ function getClaimedCollectionEffectSummary(milestones) {
     .filter(Boolean);
 }
 
-export function createRenderer({ appEl, state, balance, currencyDisplay = {}, generatorDefs, formulas, systems, saveSlots, debugOptions = {} }) {
+export function createRenderer({ appEl, state, balance, currencyDisplay = {}, generatorDefs, formulas, systems, saveSlots, debugOptions = {}, eventBus = null }) {
   const viewStateStorageKey = buildViewStateStorageKey(saveSlots?.activeSlotId);
   const persistedViewState = loadViewState(viewStateStorageKey);
 
@@ -244,13 +259,19 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     dragDropHandled: false,
     rareDropPopups: [],
     rareDropPopupId: 0,
+    dungeonBubbles: [],
+    dungeonBubbleId: 0,
+    dungeonBubbleBound: false,
     rareDropTableState: {},
     lastExpeditionSignature: "",
+    lastDungeonSignature: "",
+    lastDungeonLiveState: null,
     scrollPositions: {
       upgrades: 0,
       research: 0,
       expeditions: 0,
-      collection: 0
+      collection: 0,
+      dungeons: 0
     }
   };
 
@@ -473,6 +494,474 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     ui.good = good;
   }
 
+  function pruneDungeonBubbles(now = Date.now()) {
+    ui.dungeonBubbles = ui.dungeonBubbles.filter((bubble) => bubble.expiresAt > now);
+  }
+
+  function queueDungeonBubble({ roomId, x, y, message, variant = "good", durationMs = 2200 }) {
+    if (!message || typeof roomId !== "string") {
+      return;
+    }
+    const tileX = Math.floor(Number(x));
+    const tileY = Math.floor(Number(y));
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+      return;
+    }
+
+    const now = Date.now();
+    pruneDungeonBubbles(now);
+    ui.dungeonBubbleId += 1;
+    ui.dungeonBubbles.push({
+      id: ui.dungeonBubbleId,
+      roomId,
+      x: tileX,
+      y: tileY,
+      message: String(message),
+      variant,
+      expiresAt: now + clamp(Math.floor(Number(durationMs) || 2200), 600, 7000)
+    });
+
+    if (ui.dungeonBubbles.length > 40) {
+      ui.dungeonBubbles = ui.dungeonBubbles.slice(ui.dungeonBubbles.length - 40);
+    }
+  }
+
+  function formatDungeonLootBubbleText(loot) {
+    const parts = (Array.isArray(loot) ? loot : [])
+      .filter((entry) => entry && entry.collected !== false)
+      .map((entry) => {
+        const count = Math.max(0, Math.floor(Number(entry.count) || 0));
+        const label = toTitleToken(entry.itemName || entry.itemId || "item");
+        return count > 0 ? `${formatInt(count)} ${label}` : "";
+      })
+      .filter(Boolean);
+    return parts.length > 0 ? parts.slice(0, 3).join(", ") : "nothing";
+  }
+
+  function formatDungeonPrimaryLootBubbleText(loot) {
+    const first = (Array.isArray(loot) ? loot : [])
+      .find((entry) => entry && entry.collected !== false);
+    if (!first) {
+      return "nothing";
+    }
+    const count = Math.max(0, Math.floor(Number(first.count) || 0));
+    const label = toTitleToken(first.itemName || first.itemId || "item");
+    return `${formatInt(count)}x ${label}`;
+  }
+
+  function setupDungeonInteractionBubbles() {
+    if (ui.dungeonBubbleBound || !eventBus || typeof eventBus.on !== "function") {
+      return;
+    }
+    ui.dungeonBubbleBound = true;
+
+    eventBus.on("dungeon:pickup", (payload = {}) => {
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Picked up ${payload.itemName || toTitleToken(payload.itemId || "item")}`,
+        variant: "good"
+      });
+    });
+
+    eventBus.on("dungeon:gather", (payload = {}) => {
+      const itemName = payload.itemName || toTitleToken(payload.itemId || "resource");
+      const amount = Math.max(0, Math.floor(Number(payload.amount) || 0));
+      const nodeName = String(payload.nodeName || payload.nodeType || "resource").toLowerCase();
+      const message = nodeName.includes("tree")
+        ? `Chopped tree for ${formatInt(amount)} ${itemName}`
+        : `Gathered ${formatInt(amount)} ${itemName}`;
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message,
+        variant: "good"
+      });
+    });
+
+    eventBus.on("dungeon:chestOpened", (payload = {}) => {
+      const lootText = formatDungeonLootBubbleText(payload.loot);
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Looted chest for ${lootText}`,
+        variant: "good"
+      });
+    });
+
+    eventBus.on("dungeon:mobDefeated", (payload = {}) => {
+      const lootText = formatDungeonPrimaryLootBubbleText(payload.loot);
+      const mobName = payload.mobName || toTitleToken(payload.mobType || "mob");
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `${mobName} dropped ${lootText}`,
+        variant: "good"
+      });
+    });
+
+    eventBus.on("dungeon:drop", (payload = {}) => {
+      const itemName = payload.itemName || toTitleToken(payload.itemId || "item");
+      const count = Math.max(0, Math.floor(Number(payload.count) || 0));
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Dropped ${formatInt(count)}x ${itemName}`,
+        variant: "info",
+        durationMs: 1600
+      });
+    });
+
+    eventBus.on("dungeon:mobFailed", (payload = {}) => {
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Need power ${formatInt(payload.requiredPower || 0)}`,
+        variant: "bad",
+        durationMs: 1800
+      });
+    });
+
+    eventBus.on("dungeon:requirementFailed", (payload = {}) => {
+      const fallbackMessage = payload.requiredItemId
+        ? `Need ${toTitleToken(payload.requiredItemId)}`
+        : "Missing required item";
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: payload.message || fallbackMessage,
+        variant: "bad",
+        durationMs: 1800
+      });
+    });
+
+    eventBus.on("dungeon:craft", (payload = {}) => {
+      const outputName = payload.outputName || toTitleToken(payload.outputItemId || "item");
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Crafted ${formatInt(payload.outputCount || 0)} ${outputName}`,
+        variant: "good"
+      });
+    });
+
+    eventBus.on("dungeon:unlock", (payload = {}) => {
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Unlocked ${toTitleToken(payload.direction || "door")} door`,
+        variant: "info"
+      });
+    });
+
+    eventBus.on("dungeon:craftStationOpened", (payload = {}) => {
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: "Workbench ready",
+        variant: "info",
+        durationMs: 1600
+      });
+    });
+
+    eventBus.on("dungeon:descend", (payload = {}) => {
+      queueDungeonBubble({
+        roomId: payload.roomId,
+        x: payload.x,
+        y: payload.y,
+        message: `Descended to depth ${formatInt(payload.nextDepth || 1)}`,
+        variant: "info",
+        durationMs: 2200
+      });
+    });
+  }
+
+  function toDungeonTileKey(x, y) {
+    return `${Math.floor(Number(x) || 0)},${Math.floor(Number(y) || 0)}`;
+  }
+
+  function parseDungeonTileKey(key) {
+    const [xRaw, yRaw] = String(key || "").split(",");
+    const x = Math.floor(Number(xRaw));
+    const y = Math.floor(Number(yRaw));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null;
+    }
+    return { x, y };
+  }
+
+  function getDungeonTileMaps(room) {
+    const floorItems = Array.isArray(room?.floorItems) ? room.floorItems : [];
+    const gatherNodes = Array.isArray(room?.gatherNodes) ? room.gatherNodes : [];
+    const livingMobs = (Array.isArray(room?.mobs) ? room.mobs : []).filter((mob) => mob.alive);
+    const closedChests = (Array.isArray(room?.chests) ? room.chests : []).filter((chest) => !chest.opened);
+    const remainingItems = floorItems.filter((item) => !item.pickedUp);
+
+    return {
+      itemsByKey: new Map(remainingItems.map((item) => [toDungeonTileKey(item.x, item.y), item])),
+      gatherByKey: new Map(gatherNodes.filter((node) => Number(node.remainingCharges || 0) > 0).map((node) => [toDungeonTileKey(node.x, node.y), node])),
+      mobsByKey: new Map(livingMobs.map((mob) => [toDungeonTileKey(mob.x, mob.y), mob])),
+      chestsByKey: new Map(closedChests.map((chest) => [toDungeonTileKey(chest.x, chest.y), chest])),
+      doorsByKey: new Map(
+        Object.values(room?.doors || {})
+          .filter(Boolean)
+          .map((door) => [toDungeonTileKey(door.x, door.y), door])
+      )
+    };
+  }
+
+  function getDungeonBubblesByKey(activeRoomId) {
+    const bubblesByKey = new Map();
+    ui.dungeonBubbles.forEach((bubble) => {
+      if (bubble.roomId !== activeRoomId) {
+        return;
+      }
+      const key = toDungeonTileKey(bubble.x, bubble.y);
+      const existing = bubblesByKey.get(key) || [];
+      existing.push(bubble);
+      bubblesByKey.set(key, existing.slice(-3));
+    });
+    return bubblesByKey;
+  }
+
+  function getDungeonTilePresentation({ room, player, movement, tileMaps, bubblesByKey, x, y }) {
+    const key = toDungeonTileKey(x, y);
+    const door = tileMaps.doorsByKey.get(key);
+    const item = tileMaps.itemsByKey.get(key);
+    const gather = tileMaps.gatherByKey.get(key);
+    const mob = tileMaps.mobsByKey.get(key);
+    const chest = tileMaps.chestsByKey.get(key);
+    const specialCrafting = room.special?.type === "crafting" && room.special.x === x && room.special.y === y;
+    const specialDescend = room.special?.type === "descend" && room.special.x === x && room.special.y === y;
+    const isPlayer = player.x === x && player.y === y;
+    const isTarget = Boolean(movement) && movement.target?.x === x && movement.target?.y === y;
+
+    let token = "";
+    let title = `Tile (${x}, ${y})`;
+    const classes = ["rift-cell"];
+
+    if (door) {
+      if (door.blocked) {
+        classes.push("rift-cell--door-blocked");
+        token = "X";
+        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} Door: collapsed`;
+      } else if (door.unlocked) {
+        classes.push("rift-cell--door-open");
+        token = (DUNGEON_DIRECTION_LABELS[door.direction] || "D").charAt(0);
+        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} Door: open`;
+      } else {
+        classes.push("rift-cell--door-locked");
+        token = "L";
+        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} Door: locked (${door.lockTag || "key"})`;
+      }
+    }
+    if (gather) {
+      classes.push("rift-cell--gather");
+      token = gather.nodeType === "tree" ? "T" : "R";
+      title = `${gather.name} (${formatInt(gather.remainingCharges)} charges)`;
+    }
+    if (item) {
+      classes.push("rift-cell--item");
+      token = "I";
+      title = `Item: ${item.name}`;
+    }
+    if (chest) {
+      classes.push("rift-cell--chest");
+      token = "C";
+      title = `Chest: ${chest.name}`;
+    }
+    if (mob) {
+      classes.push("rift-cell--mob");
+      token = "M";
+      title = `${mob.name} (power ${formatInt(mob.requiredPower || 1)})`;
+    }
+    if (specialCrafting) {
+      classes.push("rift-cell--crafting");
+      token = "W";
+      title = `${room.special?.name || "Workbench"}`;
+    }
+    if (specialDescend) {
+      classes.push("rift-cell--descend");
+      token = "O";
+      title = "Descend Hole";
+    }
+    if (isPlayer) {
+      classes.push("rift-cell--player");
+      token = "P";
+      title = `${title} | You are here`;
+    }
+    if (isTarget) {
+      classes.push("rift-cell--target");
+      title = `${title} | Movement target`;
+    }
+
+    const tileBubbles = bubblesByKey.get(key) || [];
+    const bubbleMarkup = tileBubbles
+      .map((bubble, index) => `<span class="rift-cell-bubble rift-cell-bubble--${bubble.variant || "info"}" style="--bubble-index:${index};">${escapeHtml(bubble.message)}</span>`)
+      .join("");
+
+    return {
+      x,
+      y,
+      classes,
+      title,
+      token,
+      isTarget,
+      bubbleMarkup
+    };
+  }
+
+  function renderDungeonTileInnerMarkup(tile) {
+    return `${tile.token ? `<span class="rift-cell-token">${tile.token}</span>` : ""}${tile.isTarget ? '<span class="rift-cell-target-marker">X</span>' : ""}${tile.bubbleMarkup}`;
+  }
+
+  function renderDungeonTileButtonMarkup(tile) {
+    return `
+      <button
+        class="${tile.classes.join(" ")}"
+        data-action="dungeon:tile:${tile.x}:${tile.y}"
+        data-rift-x="${tile.x}"
+        data-rift-y="${tile.y}"
+        title="${escapeHtml(tile.title)}"
+      >
+        ${renderDungeonTileInnerMarkup(tile)}
+      </button>
+    `;
+  }
+
+  function applyDungeonTileElement(tileEl, tile) {
+    tileEl.className = tile.classes.join(" ");
+    tileEl.title = tile.title;
+    tileEl.innerHTML = renderDungeonTileInnerMarkup(tile);
+  }
+
+  function getDungeonLiveSnapshot() {
+    const status = systems.dungeons.getStatus();
+    const run = status.activeRun;
+    const room = status.currentRoom;
+    if (!run || !room) {
+      return null;
+    }
+
+    pruneDungeonBubbles();
+
+    const player = status.player || run.player || { x: 0, y: 0 };
+    const movement = status.movement || run.movement || null;
+    const roomId = room.roomId || run.currentRoomId || "";
+    const bubbleKeys = new Set();
+    const bubbleTokens = [];
+    ui.dungeonBubbles.forEach((bubble) => {
+      if (bubble.roomId === roomId) {
+        bubbleKeys.add(toDungeonTileKey(bubble.x, bubble.y));
+        bubbleTokens.push(`${bubble.id}:${bubble.x}:${bubble.y}`);
+      }
+    });
+
+    return {
+      room,
+      roomId,
+      player,
+      movement,
+      playerKey: toDungeonTileKey(player.x, player.y),
+      targetKey: movement?.target ? toDungeonTileKey(movement.target.x, movement.target.y) : "",
+      bubbleKeys,
+      bubbleSignature: bubbleTokens.join(",")
+    };
+  }
+
+  function toStoredDungeonLiveState(snapshot) {
+    if (!snapshot) {
+      return null;
+    }
+    return {
+      roomId: snapshot.roomId,
+      playerKey: snapshot.playerKey,
+      targetKey: snapshot.targetKey,
+      bubbleKeys: Array.from(snapshot.bubbleKeys),
+      bubbleSignature: snapshot.bubbleSignature
+    };
+  }
+
+  function refreshDungeonLiveState() {
+    if (ui.activeTab !== "dungeons" || !ui.panelEl) {
+      ui.lastDungeonLiveState = null;
+      return;
+    }
+
+    const snapshot = getDungeonLiveSnapshot();
+    if (!snapshot) {
+      ui.lastDungeonLiveState = null;
+      return;
+    }
+
+    const previous = ui.lastDungeonLiveState;
+    if (!previous || previous.roomId !== snapshot.roomId) {
+      ui.lastDungeonLiveState = toStoredDungeonLiveState(snapshot);
+      return;
+    }
+
+    const keysToRefresh = new Set();
+    [previous.playerKey, snapshot.playerKey, previous.targetKey, snapshot.targetKey]
+      .filter((key) => Boolean(key))
+      .forEach((key) => keysToRefresh.add(key));
+
+    if ((previous.bubbleSignature || "") !== (snapshot.bubbleSignature || "")) {
+      (Array.isArray(previous.bubbleKeys) ? previous.bubbleKeys : []).forEach((key) => keysToRefresh.add(key));
+      snapshot.bubbleKeys.forEach((key) => keysToRefresh.add(key));
+    }
+
+    const posXEl = ui.panelEl.querySelector("[data-dungeon-pos-x]");
+    const posYEl = ui.panelEl.querySelector("[data-dungeon-pos-y]");
+    if (posXEl) {
+      posXEl.textContent = formatInt(snapshot.player.x);
+    }
+    if (posYEl) {
+      posYEl.textContent = formatInt(snapshot.player.y);
+    }
+
+    if (keysToRefresh.size <= 0) {
+      ui.lastDungeonLiveState = toStoredDungeonLiveState(snapshot);
+      return;
+    }
+
+    const tileMaps = getDungeonTileMaps(snapshot.room);
+    const bubblesByKey = getDungeonBubblesByKey(snapshot.roomId);
+
+    keysToRefresh.forEach((key) => {
+      const tilePos = parseDungeonTileKey(key);
+      if (!tilePos) {
+        return;
+      }
+      const tileEl = ui.panelEl.querySelector(`[data-rift-x="${tilePos.x}"][data-rift-y="${tilePos.y}"]`);
+      if (!tileEl) {
+        return;
+      }
+
+      const tile = getDungeonTilePresentation({
+        room: snapshot.room,
+        player: snapshot.player,
+        movement: snapshot.movement,
+        tileMaps,
+        bubblesByKey,
+        x: tilePos.x,
+        y: tilePos.y
+      });
+      applyDungeonTileElement(tileEl, tile);
+    });
+
+    ui.lastDungeonLiveState = toStoredDungeonLiveState(snapshot);
+  }
+
   function dismissRareDropPopup(popupId) {
     ui.rareDropPopups = ui.rareDropPopups.filter((popup) => popup.id !== popupId);
     renderRareDropPopups();
@@ -677,6 +1166,11 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     return Boolean(systems.expeditions.getStatus().unlocked);
   }
 
+  function isDungeonUnlocked() {
+    const nodeId = balance?.riftDelve?.unlockNodeId || "riftDelveKeystone";
+    return Boolean(state.ascensionTree?.[nodeId]);
+  }
+
   function getNextUpgradeText() {
     const unlockedUpgradeIds = balance.upgradeOrder.filter((id) => systems.upgrades.isUnlocked(id));
     const nextUpgradeId = unlockedUpgradeIds.find((id) => {
@@ -690,6 +1184,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
 
   function buildDebugPanelMarkup() {
     const telemetryEnabled = isTelemetryEnabled();
+    const riftDepth = Math.max(1, Math.floor(Number(state.riftDelve?.meta?.depth) || 1));
     const generatorRows = Object.values(generatorDefs)
       .map((def) => `
         <div class="row">
@@ -719,6 +1214,34 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         <div class="kv">Next Upgrade</div>
         <div class="kv" data-debug-next-upgrade>None</div>
       </div>
+      <div class="row">
+        <div>
+          <div class="kv">Rift Delve Depth</div>
+          <div class="kv">Sets meta depth for testing rewards and next run scaling.</div>
+        </div>
+        <div class="debug-panel__depth-controls">
+          <input
+            class="debug-panel__depth-input"
+            type="number"
+            min="1"
+            max="999"
+            step="1"
+            value="${riftDepth}"
+            data-debug-rift-depth
+            aria-label="Set Rift Delve depth"
+          >
+          ${actionButton("Set Depth", "ghost compact", "debug:set-rift-depth")}
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <div class="kv">Rift Safety Validation</div>
+          <div class="kv">Runs deterministic depth checks for room graph reachability and lock compatibility.</div>
+        </div>
+        <div class="debug-panel__depth-controls">
+          ${actionButton("Validate Rift x100", "ghost compact", "debug:validate-rift")}
+        </div>
+      </div>
       ${generatorRows}
     `;
   }
@@ -728,6 +1251,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     refs.debugMultipliers = appEl.querySelector("[data-debug-multipliers]");
     refs.debugNextUpgrade = appEl.querySelector("[data-debug-next-upgrade]");
     refs.debugTelemetryButton = appEl.querySelector('button[data-action="debug:telemetry"]');
+    refs.debugRiftDepthInput = appEl.querySelector("[data-debug-rift-depth]");
 
     refs.debugGenerators = {};
     Object.values(generatorDefs).forEach((def) => {
@@ -788,6 +1312,14 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       refs.debugTelemetryButton.classList.toggle("secondary", telemetryEnabled);
       refs.debugTelemetryButton.classList.toggle("ghost", !telemetryEnabled);
     }
+  }
+
+  function syncDebugRiftDepthInput() {
+    if (!refs.debugRiftDepthInput) {
+      return;
+    }
+    const riftDepth = Math.max(1, Math.floor(Number(state.riftDelve?.meta?.depth) || 1));
+    refs.debugRiftDepthInput.value = String(riftDepth);
   }
 
   function buildLayout() {
@@ -866,6 +1398,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         ${actionButton("Research", "ghost tab", "tab:research")}
         ${actionButton("Expeditions", "ghost tab", "tab:expeditions", !expeditionUnlocked)}
         ${actionButton("Collection", "ghost tab", "tab:collection")}
+        ${actionButton("Dungeons", "ghost tab", "tab:dungeons", false)}
         ${actionButton("Ascend", "ghost tab", "tab:ascend")}
       </section>
 
@@ -888,6 +1421,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     refs.intelHint = appEl.querySelector("#intel-hint");
     refs.intelAction = appEl.querySelector("#intel-open");
     refs.expeditionsTab = appEl.querySelector('button[data-action="tab:expeditions"]');
+    refs.dungeonsTab = appEl.querySelector('button[data-action="tab:dungeons"]');
     refs.mainGrid = appEl.querySelector("#main-grid");
     refs.rarePopupStack = appEl.querySelector("#rare-popup-stack");
     ui.pinnedEl = appEl.querySelector("#pinned-panel");
@@ -977,9 +1511,13 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
   }
 
   function toggleDebugPanel(forceState) {
+    const wasVisible = ui.debugPanelVisible;
     ui.debugPanelVisible = typeof forceState === "boolean" ? forceState : !ui.debugPanelVisible;
     ui.lastDebugRefreshAt = 0;
     renderDebugPanel();
+    if (ui.debugPanelVisible && !wasVisible) {
+      syncDebugRiftDepthInput();
+    }
     return ui.debugPanelVisible;
   }
 
@@ -1812,6 +2350,143 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     `;
   }
 
+  function renderDungeonsLockedPanel() {
+    const unlockNodeId = balance?.riftDelve?.unlockNodeId || "riftDelveKeystone";
+    return `
+      <div class="muted">Unlock <strong>${toTitleToken(unlockNodeId)}</strong> in Ascend to enter room-crawls.</div>
+      <div class="row">
+        <div class="kv">This system adds room traversal, inventory crafting, and descend loops.</div>
+        ${actionButton("Go to Ascend", "secondary", "tab:ascend")}
+      </div>
+    `;
+  }
+
+  function renderDungeonsPanel() {
+    const status = systems.dungeons.getStatus();
+    if (!status.unlocked) {
+      return renderDungeonsLockedPanel();
+    }
+
+    const meta = status.meta || {};
+    const relicsEarned = formatInt(status.rewards?.lifetime?.relicsEarned || 0);
+    if (!status.activeRun) {
+      return `
+        <div class="row">
+          <div>
+            <div><strong>Depth ${formatInt(meta.depth || 1)}</strong></div>
+            <div class="kv">Best ${formatInt(meta.bestDepth || 1)} | Descends ${formatInt(meta.totalDescends || 0)} | Rooms Cleared ${formatInt(meta.totalRoomsCleared || 0)} | Relics ${relicsEarned}</div>
+          </div>
+          ${actionButton("Start Run", "primary", "dungeon:start")}
+        </div>
+      `;
+    }
+
+    const room = status.currentRoom || { floorItems: [], gatherNodes: [], mobs: [], chests: [], doors: {}, grid: { width: 15, height: 15 } };
+    const run = status.activeRun;
+    const movement = status.movement;
+    const crafting = status.crafting || {};
+    const craftingVisible = Boolean(crafting.stationOpen && crafting.stationRoomId === room.roomId);
+    pruneDungeonBubbles();
+    const player = status.player || run.player || { x: 0, y: 0 };
+    const grid = room.grid || { width: 15, height: 15 };
+    const tileMaps = getDungeonTileMaps(room);
+    const activeBubbleRoomId = room.roomId || run.currentRoomId || "";
+    const bubblesByKey = getDungeonBubblesByKey(activeBubbleRoomId);
+
+    const tileButtons = [];
+    for (let y = 0; y < grid.height; y += 1) {
+      for (let x = 0; x < grid.width; x += 1) {
+        const tile = getDungeonTilePresentation({
+          room,
+          player,
+          movement,
+          tileMaps,
+          bubblesByKey,
+          x,
+          y
+        });
+        tileButtons.push(renderDungeonTileButtonMarkup(tile));
+      }
+    }
+
+    const craftingRows = (Array.isArray(status.recipes) ? status.recipes : [])
+      .map((recipe) => {
+        const costs = (Array.isArray(recipe.costs) ? recipe.costs : [])
+          .map((cost) => `${formatInt(cost.count || 0)} ${toTitleToken(cost.itemId)}`)
+          .join(" + ");
+        const outputCount = formatInt(recipe.output?.count || 1);
+        const outputName = toTitleToken(recipe.output?.itemId || "item");
+        return `
+          <div class="row">
+            <div class="kv">${recipe.name}: ${costs} -> ${outputCount} ${outputName}</div>
+            ${actionButton("Craft", "secondary compact", `dungeon:craft:${recipe.id}`, !recipe.canCraft || Boolean(movement))}
+          </div>
+        `;
+      })
+      .join("");
+
+    const craftingInventoryPopup = craftingVisible
+      ? `
+        <div class="rift-crafting-popup rift-crafting-popup--inventory">
+          <div class="rift-crafting-popup__header">
+            <h3>Workbench</h3>
+            ${actionButton("Close", "ghost compact", "dungeon:craft-close")}
+          </div>
+          <div class="rift-crafting-popup__body">
+            ${craftingRows || "<div class=\"kv\">No recipes available.</div>"}
+          </div>
+        </div>
+      `
+      : "";
+
+    const inventorySlots = (status.inventory?.slots || []).map((slot, index) => {
+      if (!slot) {
+        return `<div class="rift-slot"><span class="kv">Slot ${index + 1}</span><div class="muted">Empty</div></div>`;
+      }
+      return `
+        <div class="rift-slot">
+          <span class="kv">Slot ${index + 1}</span>
+          <div class="rift-slot-row">
+            <div><strong>${slot.name}</strong> x${formatInt(slot.count || 0)}</div>
+            <div class="rift-slot-actions">${actionButton("Drop 1", "ghost compact", `dungeon:drop-slot:${index}`, Boolean(movement))}</div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    const descendAction = room.special?.type === "descend"
+      ? `<div class="row">${actionButton("Descend", "primary", "dungeon:descend", Boolean(movement))}<div class="kv">Black hole soft-resets this system and increases depth.</div></div>`
+      : "";
+
+    return `
+      <div class="row">
+        <div>
+          <div><strong>${room.name || "Unknown Room"}</strong> | Depth ${formatInt(run.depth || 1)}</div>
+          <div class="kv">${room.description || ""} | Combat power ${formatInt(status.playerPower || 1)} | Pos (<span data-dungeon-pos-x>${formatInt(player.x)}</span>, <span data-dungeon-pos-y>${formatInt(player.y)}</span>) | Relics ${relicsEarned}</div>
+        </div>
+        ${actionButton("Abandon", "ghost", "dungeon:abandon")}
+      </div>
+
+      <div class="rift-room-layout">
+        <aside class="rift-room-sidebar">
+          <h3>Inventory (6 Slots)</h3>
+          <div class="rift-inventory-grid">${inventorySlots}</div>
+          ${craftingInventoryPopup}
+        </aside>
+
+        <div class="rift-room-main">
+          <div class="rift-grid-wrap">
+            <div class="rift-grid-board" style="--cols:${grid.width};--rows:${grid.height};">
+              ${tileButtons.join("")}
+            </div>
+          </div>
+
+          ${descendAction}
+        </div>
+      </div>
+    `;
+  }
+
   function renderTabPanel(rates) {
     if (ui.activeTab === "upgrades") {
       return renderUpgradesPanel();
@@ -1824,6 +2499,9 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
     if (ui.activeTab === "collection") {
       return renderCollectionPanel();
+    }
+    if (ui.activeTab === "dungeons") {
+      return renderDungeonsPanel();
     }
     if (ui.activeTab === "ascend") {
       return renderAscendPanel();
@@ -1844,9 +2522,10 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     const expeditionUnlocked = isExpeditionUnlocked();
     const isAscendTab = ui.activeTab === "ascend";
     const isExpeditionsTab = ui.activeTab === "expeditions" && expeditionUnlocked;
-    const isFullWidthTab = isAscendTab || isExpeditionsTab;
+    const isDungeonsTab = ui.activeTab === "dungeons";
+    const isFullWidthTab = isAscendTab || isExpeditionsTab || isDungeonsTab;
     snapshotRareDropTableState();
-    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection")) {
+    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection" || ui.activeTab === "dungeons")) {
       const currentScroll = ui.panelEl.querySelector(".scroll-panel");
       if (currentScroll) {
         ui.scrollPositions[ui.activeTab] = currentScroll.scrollTop;
@@ -1858,7 +2537,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
     ui.panelEl.innerHTML = renderTabPanel(rates);
     applyTabActiveState();
-    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection")) {
+    if (ui.panelEl && (ui.activeTab === "upgrades" || ui.activeTab === "research" || ui.activeTab === "expeditions" || ui.activeTab === "collection" || ui.activeTab === "dungeons")) {
       const nextScroll = ui.panelEl.querySelector(".scroll-panel");
       if (nextScroll) {
         nextScroll.scrollTop = ui.scrollPositions[ui.activeTab] || 0;
@@ -1875,6 +2554,8 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       refs.mainGrid.classList.remove("ascend-mode");
     }
     ui.lastExpeditionSignature = getExpeditionRenderSignature();
+    ui.lastDungeonSignature = getDungeonRenderSignature();
+    ui.lastDungeonLiveState = toStoredDungeonLiveState(getDungeonLiveSnapshot());
     persistCurrentViewState();
   }
 
@@ -1901,6 +2582,37 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       continuous.active ? 1 : 0,
       continuous.bandId || "",
       continuous.stopReason || ""
+    ].join("|");
+  }
+
+  function getDungeonRenderSignature() {
+    pruneDungeonBubbles();
+    const status = systems.dungeons.getStatus();
+    const run = status.activeRun;
+    const room = status.currentRoom;
+    const doorSignature = Object.values(room?.doors || {})
+      .map((door) => `${door.direction}:${door.unlocked ? 1 : 0}:${door.blocked ? 1 : 0}:${door.requiredKeys || 0}`)
+      .join(",");
+    return [
+      status.unlocked ? 1 : 0,
+      status.meta?.depth || 0,
+      status.meta?.totalDescends || 0,
+      status.rewards?.lifetime?.relicsEarned || 0,
+      status.crafting?.stationOpen ? 1 : 0,
+      status.crafting?.stationRoomId || "",
+      status.playerPower || 0,
+      run?.runId || "",
+      run?.currentRoomId || "",
+      run?.movement ? 1 : 0,
+      run?.movement?.target?.x ?? -1,
+      run?.movement?.target?.y ?? -1,
+      Array.isArray(room?.floorItems) ? room.floorItems.filter((item) => !item.pickedUp).length : 0,
+      Array.isArray(room?.gatherNodes) ? room.gatherNodes.map((node) => node.remainingCharges || 0).join(",") : "",
+      Array.isArray(room?.mobs) ? room.mobs.filter((mob) => mob.alive).length : 0,
+      Array.isArray(room?.chests) ? room.chests.filter((chest) => !chest.opened).length : 0,
+      room?.special?.type || "",
+      doorSignature,
+      (status.inventory?.slots || []).map((slot) => (slot ? `${slot.itemId}:${slot.count}` : "_")).join(",")
     ].join("|");
   }
 
@@ -2074,6 +2786,8 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         action === "tab:expeditions" ||
         action.startsWith("expedition:") ||
         action.startsWith("ship:");
+      const dungeonActionRequested =
+        action.startsWith("dungeon:");
       if (!isExpeditionUnlocked() && expeditionActionRequested) {
         ui.expeditionsView = "runs";
         setNotice("Unlock Expedition Keystone in Ascend to access Expeditions.", false);
@@ -2081,6 +2795,11 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
           ui.activeTab = "ascend";
           renderPanel();
         }
+        refreshHud();
+        return;
+      }
+      if (!isDungeonUnlocked() && dungeonActionRequested) {
+        setNotice("Unlock Rift Delve Keystone in Ascend to access Dungeons.", false);
         refreshHud();
         return;
       }
@@ -2093,6 +2812,60 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         setNotice(`Balance telemetry ${nextEnabled ? "enabled" : "disabled"}.`, nextEnabled);
         ui.lastDebugRefreshAt = 0;
         refreshDebugPanelMetrics();
+      } else if (action === "debug:set-rift-depth") {
+        const rawDepth = refs.debugRiftDepthInput?.value;
+        const parsedDepth = Math.floor(Number(rawDepth));
+        if (!Number.isFinite(parsedDepth)) {
+          setNotice("Enter a valid Rift Delve depth value.", false);
+          refreshHud();
+          return;
+        }
+
+        const nextDepth = clamp(parsedDepth, 1, 999);
+        if (!state.riftDelve || typeof state.riftDelve !== "object") {
+          state.riftDelve = { meta: { depth: nextDepth, bestDepth: nextDepth } };
+        }
+        if (!state.riftDelve.meta || typeof state.riftDelve.meta !== "object") {
+          state.riftDelve.meta = { depth: nextDepth, bestDepth: nextDepth };
+        }
+
+        state.riftDelve.meta.depth = nextDepth;
+        state.riftDelve.meta.bestDepth = Math.max(
+          Math.max(1, Math.floor(Number(state.riftDelve.meta.bestDepth) || 1)),
+          nextDepth
+        );
+
+        if (state.riftDelve.activeRun && typeof state.riftDelve.activeRun === "object") {
+          state.riftDelve.activeRun.depth = nextDepth;
+        }
+
+        ui.lastDungeonSignature = "";
+        ui.lastDebugRefreshAt = 0;
+        refreshDebugPanelMetrics();
+        setNotice(`Rift Delve depth set to ${formatInt(nextDepth)}.`, true);
+        renderPanel();
+      } else if (action === "debug:validate-rift") {
+        if (!systems.dungeons || typeof systems.dungeons.runSafetyValidation !== "function") {
+          setNotice("Rift safety validator is not available.", false);
+          refreshHud();
+          return;
+        }
+
+        const result = systems.dungeons.runSafetyValidation({
+          sampleCount: 100,
+          startDepth: state.riftDelve?.meta?.depth || 1
+        });
+        if (result.ok) {
+          setNotice(`Rift validation passed across ${formatInt(result.sampleCount || 0)} depth samples.`, true);
+        } else {
+          const firstFailure = Array.isArray(result.failures) ? result.failures[0] : null;
+          const depthLabel = firstFailure ? `depth ${formatInt(firstFailure.depth || 0)}: ` : "";
+          const reason = firstFailure?.reason || "Unknown validation failure.";
+          setNotice(`Rift validation failed at ${depthLabel}${reason}`, false);
+        }
+        ui.lastDebugRefreshAt = 0;
+        refreshDebugPanelMetrics();
+        renderPanel();
       } else if (action === "transmute") {
         systems.actions.manualTransmute();
         setNotice("Matter transmuted.", true);
@@ -2193,6 +2966,44 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
           ? (result.encounter ? `Voyage path locked. Encounter: ${result.encounter.name}.` : "Voyage path locked.")
           : result.reason;
         setNotice(notice, result.ok);
+        renderPanel();
+      } else if (action === "dungeon:start") {
+        const result = systems.dungeons.startRun();
+        setNotice(result.ok ? "Rift Delve run started." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("dungeon:tile:")) {
+        const parts = action.split(":");
+        const x = Number(parts[2]);
+        const y = Number(parts[3]);
+        const result = systems.dungeons.moveToTile(x, y);
+        setNotice(result.ok ? (result.message || "Moving.") : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("dungeon:craft:")) {
+        const recipeId = action.split(":")[2] || "";
+        const result = systems.dungeons.craft(recipeId);
+        setNotice(result.ok ? "Craft complete." : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("dungeon:drop-slot:")) {
+        const slotIndex = Number(action.split(":")[2]);
+        const result = systems.dungeons.dropInventorySlot(slotIndex);
+        const droppedName = result?.dropped?.itemName || "item";
+        const droppedCount = formatInt(result?.dropped?.count || 0);
+        setNotice(result.ok ? `Dropped ${droppedCount}x ${droppedName}.` : result.reason, result.ok);
+        renderPanel();
+      } else if (action === "dungeon:craft-close") {
+        const result = systems.dungeons.closeCraftingStation();
+        setNotice(result.ok ? "Workbench closed." : result.reason, result.ok);
+        renderPanel();
+      } else if (action === "dungeon:descend") {
+        const result = systems.dungeons.interactDescend();
+        const notice = result.ok
+          ? `Descended. +${formatInt(result.reward?.relics || 0)} relics. Depth ${formatInt(result.nextDepth || 1)} unlocked.`
+          : result.reason;
+        setNotice(notice, result.ok);
+        renderPanel();
+      } else if (action === "dungeon:abandon") {
+        const result = systems.dungeons.abandonRun();
+        setNotice(result.ok ? "Rift Delve run abandoned." : result.reason, result.ok);
         renderPanel();
       } else if (action.startsWith("collection:claim:")) {
         const milestoneId = action.split(":")[2] || "";
@@ -2460,6 +3271,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
   }
 
   function start() {
+    setupDungeonInteractionBubbles();
     buildLayout();
     bindEvents();
     renderPanel();
@@ -2538,6 +3350,14 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         renderPanel();
       } else {
         refreshExpeditionLiveState();
+      }
+    } else if (ui.activeTab === "dungeons") {
+      const nextSignature = getDungeonRenderSignature();
+      if (nextSignature !== ui.lastDungeonSignature) {
+        ui.lastDungeonSignature = nextSignature;
+        renderPanel();
+      } else {
+        refreshDungeonLiveState();
       }
     }
   }

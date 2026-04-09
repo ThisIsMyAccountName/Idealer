@@ -6,6 +6,7 @@ import * as formulas from "./engine/formulas.js";
 import { createTickSystem } from "./engine/tickSystem.js";
 import { ASCEND_TREE } from "./config/ascendTree.js";
 import { createAscendTreeSystem } from "./game/ascendTreeSystem.js";
+import { createDungeonSystem } from "./game/dungeonSystem.js";
 import { createExpeditionSystem } from "./game/expeditionSystem.js";
 import { createGeneratorSystem } from "./game/generatorSystem.js";
 import { recomputePerks } from "./game/modifiers.js";
@@ -54,8 +55,15 @@ const systems = {
   }),
   ascendTree: createAscendTreeSystem({ state, nodes: ASCEND_TREE, resourceManager, eventBus, recompute }),
   ships: createShipSystem({ state, balance: BALANCE, resourceManager, eventBus }),
+  dungeons: null,
   expeditions: null
 };
+systems.dungeons = createDungeonSystem({
+  state,
+  resourceManager,
+  eventBus,
+  balance: BALANCE
+});
 systems.expeditions = createExpeditionSystem({
   state,
   resourceManager,
@@ -154,6 +162,7 @@ const renderer = createRenderer({
   currencyDisplay: CURRENCY_DISPLAY,
   generatorDefs,
   formulas,
+  eventBus,
   systems,
   debugOptions: {
     isTelemetryEnabled,
@@ -185,6 +194,7 @@ const offline = applyOfflineProgress(
   formulas,
   (elapsedSeconds) => {
     systems.expeditions.advance(elapsedSeconds, BALANCE.expeditions?.offlineProgressMultiplier || 0.5);
+    systems.dungeons.advance(elapsedSeconds, BALANCE.riftDelve?.offlineProgressMultiplier || 0.45);
   }
 );
 if (offline.elapsedSeconds > 5) {
@@ -202,6 +212,7 @@ const tickSystem = createTickSystem({
   eventBus,
   onAdvance: (dtSeconds) => {
     systems.expeditions.advance(dtSeconds, 1);
+    systems.dungeons.advance(dtSeconds, 1);
   }
 });
 

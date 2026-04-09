@@ -160,6 +160,36 @@ function sanitizeChestItem(item) {
   };
 }
 
+function createEmptyRiftSlots(count = 6) {
+  return Array.from({ length: count }, () => null);
+}
+
+function sanitizeRiftInventorySlot(slot) {
+  if (!slot || typeof slot !== "object") {
+    return null;
+  }
+  const itemId = typeof slot.itemId === "string" ? slot.itemId.trim() : "";
+  if (!itemId) {
+    return null;
+  }
+  const itemType = typeof slot.itemType === "string" ? slot.itemType.trim() : "material";
+  const count = clampInt(slot.count, 1, 999);
+  const maxStack = clampInt(slot.maxStack, 1, 999);
+  const unlockTags = Array.isArray(slot.unlockTags)
+    ? slot.unlockTags.map((tag) => String(tag || "").trim()).filter(Boolean)
+    : [];
+  return {
+    itemId,
+    itemType,
+    name: typeof slot.name === "string" && slot.name.trim() ? slot.name.trim() : itemId,
+    count,
+    maxStack,
+    toolTag: typeof slot.toolTag === "string" ? slot.toolTag : null,
+    unlockTags,
+    keyUses: clampInt(slot.keyUses, 0, 99)
+  };
+}
+
 export function createInitialState() {
   return {
     meta: {
@@ -285,6 +315,35 @@ export function createInitialState() {
       activeRun: null,
       pendingRewards: null
     },
+    riftDelve: {
+      meta: {
+        depth: 1,
+        bestDepth: 1,
+        totalDescends: 0,
+        totalRoomsCleared: 0,
+        seededRunCounter: 0
+      },
+      activeRun: null,
+      inventory: {
+        slots: createEmptyRiftSlots(6),
+        equipped: {
+          mainHand: null,
+          offHand: null
+        }
+      },
+      crafting: {
+        knownRecipes: {},
+        queuedCraft: null,
+        stationOpen: false,
+        stationRoomId: null
+      },
+      rewards: {
+        pendingClaim: null,
+        lifetime: {
+          relicsEarned: 0
+        }
+      }
+    },
     perks: {
       productionMultiplier: 1,
       matterRateMultiplier: 1,
@@ -342,6 +401,34 @@ export function sanitizeState(state) {
     collection: {
       ...safe.expeditions.collection,
       ...(state.expeditions?.collection || {})
+    }
+  };
+  safe.riftDelve = {
+    ...safe.riftDelve,
+    ...(state.riftDelve || {}),
+    meta: {
+      ...safe.riftDelve.meta,
+      ...(state.riftDelve?.meta || {})
+    },
+    inventory: {
+      ...safe.riftDelve.inventory,
+      ...(state.riftDelve?.inventory || {}),
+      equipped: {
+        ...safe.riftDelve.inventory.equipped,
+        ...(state.riftDelve?.inventory?.equipped || {})
+      }
+    },
+    crafting: {
+      ...safe.riftDelve.crafting,
+      ...(state.riftDelve?.crafting || {})
+    },
+    rewards: {
+      ...safe.riftDelve.rewards,
+      ...(state.riftDelve?.rewards || {}),
+      lifetime: {
+        ...safe.riftDelve.rewards.lifetime,
+        ...(state.riftDelve?.rewards?.lifetime || {})
+      }
     }
   };
   safe.perks = { ...safe.perks, ...(state.perks || {}) };
@@ -517,6 +604,52 @@ export function sanitizeState(state) {
     safe.expeditions.activeRun = null;
   }
   safe.expeditions.pendingRewards = null;
+
+  safe.riftDelve.meta.depth = clampInt(safe.riftDelve.meta.depth, 1, 999);
+  safe.riftDelve.meta.bestDepth = clampInt(safe.riftDelve.meta.bestDepth, 1, 999);
+  safe.riftDelve.meta.totalDescends = clampInt(safe.riftDelve.meta.totalDescends, 0, Number.MAX_SAFE_INTEGER);
+  safe.riftDelve.meta.totalRoomsCleared = clampInt(safe.riftDelve.meta.totalRoomsCleared, 0, Number.MAX_SAFE_INTEGER);
+  safe.riftDelve.meta.seededRunCounter = clampInt(safe.riftDelve.meta.seededRunCounter, 0, Number.MAX_SAFE_INTEGER);
+  safe.riftDelve.meta.bestDepth = Math.max(safe.riftDelve.meta.bestDepth, safe.riftDelve.meta.depth);
+
+  const desiredSlots = 6;
+  const rawSlots = Array.isArray(safe.riftDelve.inventory.slots) ? safe.riftDelve.inventory.slots : [];
+  const normalizedSlots = rawSlots
+    .slice(0, desiredSlots)
+    .map((slot) => sanitizeRiftInventorySlot(slot));
+  while (normalizedSlots.length < desiredSlots) {
+    normalizedSlots.push(null);
+  }
+  safe.riftDelve.inventory.slots = normalizedSlots;
+  safe.riftDelve.inventory.equipped = {
+    mainHand: typeof safe.riftDelve.inventory.equipped.mainHand === "string" ? safe.riftDelve.inventory.equipped.mainHand : null,
+    offHand: typeof safe.riftDelve.inventory.equipped.offHand === "string" ? safe.riftDelve.inventory.equipped.offHand : null
+  };
+
+  const knownRecipes = safe.riftDelve.crafting.knownRecipes && typeof safe.riftDelve.crafting.knownRecipes === "object"
+    ? safe.riftDelve.crafting.knownRecipes
+    : {};
+  Object.keys(knownRecipes).forEach((recipeId) => {
+    knownRecipes[recipeId] = Boolean(knownRecipes[recipeId]);
+  });
+  safe.riftDelve.crafting.knownRecipes = knownRecipes;
+  safe.riftDelve.crafting.queuedCraft = typeof safe.riftDelve.crafting.queuedCraft === "string"
+    ? safe.riftDelve.crafting.queuedCraft
+    : null;
+  safe.riftDelve.crafting.stationOpen = Boolean(safe.riftDelve.crafting.stationOpen);
+  safe.riftDelve.crafting.stationRoomId = typeof safe.riftDelve.crafting.stationRoomId === "string"
+    ? safe.riftDelve.crafting.stationRoomId
+    : null;
+
+  safe.riftDelve.rewards.pendingClaim = safe.riftDelve.rewards.pendingClaim && typeof safe.riftDelve.rewards.pendingClaim === "object"
+    ? safe.riftDelve.rewards.pendingClaim
+    : null;
+  safe.riftDelve.rewards.lifetime.relicsEarned = clampInt(safe.riftDelve.rewards.lifetime.relicsEarned, 0, Number.MAX_SAFE_INTEGER);
+
+  if (!safe.riftDelve.activeRun || typeof safe.riftDelve.activeRun !== "object") {
+    safe.riftDelve.activeRun = null;
+  }
+
   safe.perks.productionMultiplier = Math.max(1, Number(safe.perks.productionMultiplier) || 1);
   safe.perks.matterRateMultiplier = Math.max(1, Number(safe.perks.matterRateMultiplier) || 1);
   safe.perks.fireRateMultiplier = Math.max(1, Number(safe.perks.fireRateMultiplier) || 1);

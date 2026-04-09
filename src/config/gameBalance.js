@@ -1555,6 +1555,234 @@ export const BALANCE = {
       }
     ]
   },
+  riftDelve: {
+    unlockNodeId: "riftDelveKeystone",
+    inventorySlots: 6,
+    grid: {
+      width: 15,
+      height: 15,
+      stepMs: 180
+    },
+    offlineProgressMultiplier: 0.45,
+    depthScaling: {
+      lockTierEveryDescend: 1,
+      mobPowerPerDescend: 0.1,
+      rewardPerDescend: 0.12
+    },
+    combat: {
+      basePower: 1,
+      toolPower: {
+        dagger: 2,
+        axe: 3,
+        pickaxe: 2
+      }
+    },
+    roomOrder: ["start-room", "quarry-room", "forge-room", "descend-room"],
+    itemDefs: {
+      dagger: {
+        id: "dagger",
+        name: "Rust Dagger",
+        type: "tool",
+        toolTag: "dagger",
+        maxStack: 1
+      },
+      axe: {
+        id: "axe",
+        name: "Woodcutter Axe",
+        type: "tool",
+        toolTag: "axe",
+        maxStack: 1
+      },
+      pickaxe: {
+        id: "pickaxe",
+        name: "Miner Pickaxe",
+        type: "tool",
+        toolTag: "pickaxe",
+        maxStack: 1
+      },
+      wood: {
+        id: "wood",
+        name: "Wood",
+        type: "material",
+        maxStack: 99
+      },
+      stone: {
+        id: "stone",
+        name: "Stone",
+        type: "material",
+        maxStack: 99
+      },
+      keyWood: {
+        id: "keyWood",
+        name: "Wood Key",
+        type: "key",
+        unlockTags: ["wood", "timber"],
+        maxStack: 20
+      },
+      keyStone: {
+        id: "keyStone",
+        name: "Stone Key",
+        type: "key",
+        unlockTags: ["stone", "ore", "rift"],
+        maxStack: 20
+      }
+    },
+    gatherNodes: {
+      tree: {
+        id: "tree",
+        name: "Tree",
+        requiredTool: "axe",
+        yieldItemId: "wood",
+        yieldCount: 2,
+        baseCharges: 4
+      },
+      rocks: {
+        id: "rocks",
+        name: "Rocks",
+        requiredTool: "pickaxe",
+        yieldItemId: "stone",
+        yieldCount: 2,
+        baseCharges: 4
+      }
+    },
+    mobDefs: {
+      "root-scrambler": {
+        id: "root-scrambler",
+        name: "Root Scrambler",
+        basePower: 4,
+        failPenalty: { matter: 35, fire: 0 },
+        drops: [
+          { itemId: "wood", count: 2 }
+        ]
+      },
+      "quarry-mite": {
+        id: "quarry-mite",
+        name: "Quarry Mite",
+        basePower: 6,
+        failPenalty: { matter: 60, fire: 1 },
+        drops: [
+          { itemId: "stone", count: 2 },
+          { itemId: "wood", count: 1 }
+        ]
+      }
+    },
+    chestDefs: {
+      "workbench-cache": {
+        id: "workbench-cache",
+        name: "Workbench Cache",
+        loot: [
+          { itemId: "wood", count: 2 }
+        ]
+      },
+      "quarry-lockbox": {
+        id: "quarry-lockbox",
+        name: "Quarry Lockbox",
+        loot: [
+          { itemId: "stone", count: 2 },
+          { itemId: "keyWood", count: 1 }
+        ]
+      }
+    },
+    craftingRecipes: [
+      {
+        id: "craft-wood-key",
+        name: "Wood Key",
+        costs: [
+          { itemId: "wood", count: 3 }
+        ],
+        output: { itemId: "keyWood", count: 1 }
+      },
+      {
+        id: "craft-stone-key",
+        name: "Stone Key",
+        costs: [
+          { itemId: "wood", count: 2 },
+          { itemId: "stone", count: 3 }
+        ],
+        output: { itemId: "keyStone", count: 1 }
+      }
+    ],
+    roomTemplates: {
+      "start-room": {
+        id: "start-room",
+        name: "Threshold Workshop",
+        description: "A square chamber with four sealed doors and a rough workbench.",
+        special: {
+          type: "crafting",
+          name: "Workbench"
+        },
+        floorItems: ["dagger", "axe"],
+        gatherNodes: ["tree"],
+        mobs: ["root-scrambler"],
+        chests: ["workbench-cache"]
+      },
+      "quarry-room": {
+        id: "quarry-room",
+        name: "Shale Quarry",
+        description: "Broken quarry stones and old supply hooks line the walls.",
+        floorItems: ["pickaxe"],
+        gatherNodes: ["rocks"],
+        mobs: ["quarry-mite"],
+        chests: ["quarry-lockbox"]
+      },
+      "forge-room": {
+        id: "forge-room",
+        name: "Echo Forge",
+        description: "An old forge crackles with unstable key-smithing sparks.",
+        floorItems: [],
+        gatherNodes: ["rocks", "tree"],
+        mobs: ["quarry-mite", "root-scrambler"],
+        chests: ["quarry-lockbox"]
+      },
+      "descend-room": {
+        id: "descend-room",
+        name: "Descend Chamber",
+        description: "A black hole pulses at the center of this silent room.",
+        special: {
+          type: "descend",
+          name: "Black Hole"
+        },
+        floorItems: [],
+        gatherNodes: [],
+        mobs: [],
+        chests: []
+      }
+    },
+    doorGraph: {
+      "start-room": {
+        north: { target: "quarry-room", lockTag: "wood", blocked: false },
+        east: { target: null, lockTag: "timber", blocked: true },
+        south: { target: null, lockTag: "stone", blocked: true },
+        west: { target: null, lockTag: "ore", blocked: true }
+      },
+      "quarry-room": {
+        north: { target: "forge-room", lockTag: "stone", blocked: false },
+        east: { target: null, lockTag: "rift", blocked: true },
+        south: { target: "start-room", lockTag: null, blocked: false },
+        west: { target: null, lockTag: "timber", blocked: true }
+      },
+      "forge-room": {
+        north: { target: "descend-room", lockTag: "rift", blocked: false },
+        east: { target: null, lockTag: "rift", blocked: true },
+        south: { target: "quarry-room", lockTag: null, blocked: false },
+        west: { target: null, lockTag: "ore", blocked: true }
+      },
+      "descend-room": {
+        north: { target: null, lockTag: "rift", blocked: true },
+        east: { target: null, lockTag: "rift", blocked: true },
+        south: { target: "forge-room", lockTag: null, blocked: false },
+        west: { target: null, lockTag: "rift", blocked: true }
+      }
+    },
+    rewards: {
+      descendBase: {
+        matter: 1800,
+        fire: 26,
+        shards: 1,
+        relics: 1
+      }
+    }
+  },
   upgradePower: 10,
   upgrades: {
     kineticGloves: {
