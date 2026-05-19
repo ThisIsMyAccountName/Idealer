@@ -55,32 +55,53 @@ export function productionPerSecond(state, generatorDefs) {
     matter: 0,
     fire: 0
   };
+  const perks = state.perks;
+  let metaGen = null;
 
   Object.values(generatorDefs).forEach((def) => {
+    if (def.meta) {
+      metaGen = def;
+      return;
+    }
     const level = state.generators[def.id] || 0;
     if (level <= 0) {
       return;
     }
     let rate = def.baseRate * level;
-    if (def.id === "furnace") {
-      rate *= state.perks.furnaceRateMultiplier || 1;
+    if (def.rateMultiplierPerk) {
+      rate *= perks[def.rateMultiplierPerk] || 1;
     }
-    if (def.id === "condenser") {
-      rate *= state.perks.condenserRateMultiplier || 1;
-    }
-    if (def.id === "prism") {
-      rate *= state.perks.prismRateMultiplier || 1;
+    if (def.synergy) {
+      const synergyLevel = state.generators[def.synergy.generator] || 0;
+      rate *= 1 + (perks[def.synergy.perk] || 0) * synergyLevel;
     }
     rates[def.resource] += rate;
   });
 
-  rates.matter *= state.perks.productionMultiplier * state.perks.matterRateMultiplier;
-  rates.fire *= state.perks.productionMultiplier * state.perks.fireRateMultiplier;
+  // Aether Spire: each level feeds back a slice of pooled base production
+  // into both resources. Computed before global multipliers so it never
+  // recursively amplifies itself.
+  if (metaGen) {
+    const spireLevel = state.generators[metaGen.id] || 0;
+    if (spireLevel > 0) {
+      const spireMult = metaGen.rateMultiplierPerk
+        ? perks[metaGen.rateMultiplierPerk] || 1
+        : 1;
+      const pooled = rates.matter + rates.fire;
+      const bonus = metaGen.baseRate * spireLevel * spireMult * pooled;
+      const split = metaGen.meta.split ?? 0.5;
+      rates.matter += bonus * split;
+      rates.fire += bonus * (1 - split);
+    }
+  }
+
+  rates.matter *= perks.productionMultiplier * perks.matterRateMultiplier;
+  rates.fire *= perks.productionMultiplier * perks.fireRateMultiplier;
   return rates;
 }
 
 export function prestigeShardGain(state) {
-  const sumSeen = state.lifetime.matterSeen + state.lifetime.fireSeen * 100;
+  const sumSeen = state.lifetime.matterSeen + state.lifetime.fireSeen * BALANCE.fireShardValue;
   const raw = Math.floor(Math.sqrt(sumSeen) / BALANCE.prestigeDivisor);
   return Math.floor(raw * state.perks.prestigeGainMultiplier);
 }

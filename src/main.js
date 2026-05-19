@@ -155,6 +155,91 @@ function isTelemetryEnabled() {
   return telemetryState.enabled;
 }
 
+function buildCompletedState() {
+  const completed = createInitialState();
+  const bands = Array.isArray(BALANCE.expeditions?.bands) ? BALANCE.expeditions.bands : [];
+
+  completed.resources.matter = 1e30;
+  completed.resources.fire = 1e24;
+  completed.resources.shards = 5e5;
+
+  completed.lifetime.matterSeen = 1e30;
+  completed.lifetime.fireSeen = 1e24;
+  completed.lifetime.totalClicks = 100000;
+  completed.lifetime.totalAscensions = 50;
+  completed.lifetime.expeditionRuns = 500;
+  completed.lifetime.expeditionWins = 450;
+  completed.lifetime.expeditionLosses = 50;
+  completed.lifetime.expeditionBestBand = bands.length;
+
+  Object.keys(completed.generators).forEach((id) => {
+    completed.generators[id] = 300;
+  });
+
+  BALANCE.upgradeOrder.forEach((id) => {
+    const def = BALANCE.upgrades[id];
+    if (!def) {
+      return;
+    }
+    completed.upgrades[id] = Math.min(Math.max(1, Number(def.maxTier) || 1), 250);
+  });
+
+  BALANCE.researchOrder.forEach((id) => {
+    const def = BALANCE.research[id];
+    if (!def) {
+      return;
+    }
+    completed.research[id] = Math.max(1, Number(def.maxLevel) || 1);
+  });
+
+  let facilityMaxLevelBonus = 0;
+  ASCEND_TREE.forEach((node) => {
+    completed.ascensionTree[node.id] = true;
+    facilityMaxLevelBonus += Number(node.effect?.facilityMaxLevelBonus) || 0;
+  });
+
+  bands.forEach((band) => {
+    if (!band?.id) {
+      return;
+    }
+    completed.expeditions.meta.unlockedBands[band.id] = true;
+    completed.expeditions.meta.purchasedVoyages[band.id] = true;
+  });
+  completed.expeditions.meta.intel = 100000;
+  completed.expeditions.meta.completedRuns = 450;
+  completed.expeditions.meta.failedRuns = 50;
+  completed.expeditions.meta.bestBand = bands.length;
+
+  const shipDefs = BALANCE.expeditions?.ships || {};
+  Object.keys(completed.expeditions.ships).forEach((shipId) => {
+    const ship = completed.expeditions.ships[shipId];
+    ship.acquired = true;
+    const profile = shipDefs[shipId]?.facilityProfile || {};
+    ["hull", "sail", "anchor", "net"].forEach((slot) => {
+      const maxLevel = Math.max(0, Number(profile[slot]?.maxLevel) || 0);
+      ship.facilities[slot] = maxLevel + facilityMaxLevelBonus;
+    });
+  });
+  if (completed.expeditions.ships.galleon) {
+    completed.expeditions.selectedShip = "galleon";
+  }
+
+  completed.riftDelve.meta.depth = 200;
+  completed.riftDelve.meta.bestDepth = 200;
+  completed.riftDelve.meta.totalDescends = 200;
+  completed.riftDelve.meta.totalRoomsCleared = 2000;
+
+  const sanitized = sanitizeState(completed);
+  sanitized.meta.offlineEligible = false;
+  return sanitized;
+}
+
+function loadCompletedSave() {
+  Object.assign(state, buildCompletedState());
+  saveState(state, activeSlotId);
+  window.location.reload();
+}
+
 const renderer = createRenderer({
   appEl,
   state,
@@ -166,7 +251,8 @@ const renderer = createRenderer({
   systems,
   debugOptions: {
     isTelemetryEnabled,
-    setTelemetryEnabled
+    setTelemetryEnabled,
+    loadCompletedSave
   },
   saveSlots: {
     slots: listSlots(),

@@ -217,7 +217,10 @@ export function createInitialState() {
     generators: {
       furnace: 0,
       condenser: 0,
-      prism: 0
+      prism: 0,
+      kiln: 0,
+      crucible: 0,
+      aetherSpire: 0
     },
     upgrades: {},
     research: {},
@@ -323,6 +326,10 @@ export function createInitialState() {
         totalRoomsCleared: 0,
         seededRunCounter: 0
       },
+      relics: 0,
+      relicUpgrades: {},
+      metaResources: {},
+      metaCrafts: {},
       activeRun: null,
       inventory: {
         slots: createEmptyRiftSlots(6),
@@ -332,13 +339,10 @@ export function createInitialState() {
         }
       },
       crafting: {
-        knownRecipes: {},
-        queuedCraft: null,
         stationOpen: false,
         stationRoomId: null
       },
       rewards: {
-        pendingClaim: null,
         lifetime: {
           relicsEarned: 0
         }
@@ -362,6 +366,10 @@ export function createInitialState() {
       furnaceRateMultiplier: 1,
       condenserRateMultiplier: 1,
       prismRateMultiplier: 1,
+      kilnRateMultiplier: 1,
+      crucibleRateMultiplier: 1,
+      aetherSpireRateMultiplier: 1,
+      crucibleSynergyPerPrism: 0,
       conversionCostMultiplier: 1,
       offlineEfficiencyMultiplier: 1,
       researchCostMultiplier: 1,
@@ -421,6 +429,21 @@ export function sanitizeState(state) {
     crafting: {
       ...safe.riftDelve.crafting,
       ...(state.riftDelve?.crafting || {})
+    },
+    relicUpgrades: {
+      ...(state.riftDelve?.relicUpgrades && typeof state.riftDelve.relicUpgrades === "object"
+        ? state.riftDelve.relicUpgrades
+        : {})
+    },
+    metaResources: {
+      ...(state.riftDelve?.metaResources && typeof state.riftDelve.metaResources === "object"
+        ? state.riftDelve.metaResources
+        : {})
+    },
+    metaCrafts: {
+      ...(state.riftDelve?.metaCrafts && typeof state.riftDelve.metaCrafts === "object"
+        ? state.riftDelve.metaCrafts
+        : {})
     },
     rewards: {
       ...safe.riftDelve.rewards,
@@ -612,12 +635,14 @@ export function sanitizeState(state) {
   safe.riftDelve.meta.seededRunCounter = clampInt(safe.riftDelve.meta.seededRunCounter, 0, Number.MAX_SAFE_INTEGER);
   safe.riftDelve.meta.bestDepth = Math.max(safe.riftDelve.meta.bestDepth, safe.riftDelve.meta.depth);
 
-  const desiredSlots = 6;
+  const minSlots = 6;
+  const maxSlots = 16;
   const rawSlots = Array.isArray(safe.riftDelve.inventory.slots) ? safe.riftDelve.inventory.slots : [];
+  const slotCount = Math.min(maxSlots, Math.max(minSlots, rawSlots.length));
   const normalizedSlots = rawSlots
-    .slice(0, desiredSlots)
+    .slice(0, slotCount)
     .map((slot) => sanitizeRiftInventorySlot(slot));
-  while (normalizedSlots.length < desiredSlots) {
+  while (normalizedSlots.length < minSlots) {
     normalizedSlots.push(null);
   }
   safe.riftDelve.inventory.slots = normalizedSlots;
@@ -626,28 +651,80 @@ export function sanitizeState(state) {
     offHand: typeof safe.riftDelve.inventory.equipped.offHand === "string" ? safe.riftDelve.inventory.equipped.offHand : null
   };
 
-  const knownRecipes = safe.riftDelve.crafting.knownRecipes && typeof safe.riftDelve.crafting.knownRecipes === "object"
-    ? safe.riftDelve.crafting.knownRecipes
+  safe.riftDelve.relics = clampInt(safe.riftDelve.relics, 0, Number.MAX_SAFE_INTEGER);
+  const relicUpgrades = safe.riftDelve.relicUpgrades && typeof safe.riftDelve.relicUpgrades === "object"
+    ? safe.riftDelve.relicUpgrades
     : {};
-  Object.keys(knownRecipes).forEach((recipeId) => {
-    knownRecipes[recipeId] = Boolean(knownRecipes[recipeId]);
+  const cleanRelicUpgrades = {};
+  Object.keys(relicUpgrades).forEach((nodeId) => {
+    const lvl = clampInt(relicUpgrades[nodeId], 0, 999);
+    if (lvl > 0) {
+      cleanRelicUpgrades[String(nodeId)] = lvl;
+    }
   });
-  safe.riftDelve.crafting.knownRecipes = knownRecipes;
-  safe.riftDelve.crafting.queuedCraft = typeof safe.riftDelve.crafting.queuedCraft === "string"
-    ? safe.riftDelve.crafting.queuedCraft
-    : null;
-  safe.riftDelve.crafting.stationOpen = Boolean(safe.riftDelve.crafting.stationOpen);
-  safe.riftDelve.crafting.stationRoomId = typeof safe.riftDelve.crafting.stationRoomId === "string"
-    ? safe.riftDelve.crafting.stationRoomId
-    : null;
+  safe.riftDelve.relicUpgrades = cleanRelicUpgrades;
 
-  safe.riftDelve.rewards.pendingClaim = safe.riftDelve.rewards.pendingClaim && typeof safe.riftDelve.rewards.pendingClaim === "object"
-    ? safe.riftDelve.rewards.pendingClaim
-    : null;
-  safe.riftDelve.rewards.lifetime.relicsEarned = clampInt(safe.riftDelve.rewards.lifetime.relicsEarned, 0, Number.MAX_SAFE_INTEGER);
+  const rawMetaResources = safe.riftDelve.metaResources && typeof safe.riftDelve.metaResources === "object"
+    ? safe.riftDelve.metaResources
+    : {};
+  const cleanMetaResources = {};
+  Object.keys(rawMetaResources).forEach((itemId) => {
+    const amount = clampInt(rawMetaResources[itemId], 0, Number.MAX_SAFE_INTEGER);
+    if (amount > 0) {
+      cleanMetaResources[String(itemId)] = amount;
+    }
+  });
+  safe.riftDelve.metaResources = cleanMetaResources;
 
-  if (!safe.riftDelve.activeRun || typeof safe.riftDelve.activeRun !== "object") {
+  const rawMetaCrafts = safe.riftDelve.metaCrafts && typeof safe.riftDelve.metaCrafts === "object"
+    ? safe.riftDelve.metaCrafts
+    : {};
+  const cleanMetaCrafts = {};
+  Object.keys(rawMetaCrafts).forEach((craftId) => {
+    const lvl = clampInt(rawMetaCrafts[craftId], 0, 999);
+    if (lvl > 0) {
+      cleanMetaCrafts[String(craftId)] = lvl;
+    }
+  });
+  safe.riftDelve.metaCrafts = cleanMetaCrafts;
+
+  safe.riftDelve.crafting = {
+    stationOpen: Boolean(safe.riftDelve.crafting?.stationOpen),
+    stationRoomId: typeof safe.riftDelve.crafting?.stationRoomId === "string"
+      ? safe.riftDelve.crafting.stationRoomId
+      : null
+  };
+
+  safe.riftDelve.rewards = {
+    lifetime: {
+      relicsEarned: clampInt(safe.riftDelve.rewards?.lifetime?.relicsEarned, 0, Number.MAX_SAFE_INTEGER)
+    }
+  };
+
+  const run = safe.riftDelve.activeRun;
+  const runValid = run
+    && typeof run === "object"
+    && run.rooms
+    && typeof run.rooms === "object"
+    && typeof run.currentRoomId === "string"
+    && run.rooms[run.currentRoomId]
+    && run.player
+    && Number.isFinite(Number(run.player.x))
+    && Number.isFinite(Number(run.player.y));
+  if (!runValid) {
     safe.riftDelve.activeRun = null;
+  } else {
+    run.player.hp = clampInt(run.player.hp, 0, 999999);
+    run.player.maxHp = Math.max(1, clampInt(run.player.maxHp, 1, 999999));
+    if (!Array.isArray(run.revealed)) {
+      run.revealed = [run.currentRoomId];
+    }
+    if (run.combat && typeof run.combat !== "object") {
+      run.combat = null;
+    }
+    if (run.movement && typeof run.movement !== "object") {
+      run.movement = null;
+    }
   }
 
   safe.perks.productionMultiplier = Math.max(1, Number(safe.perks.productionMultiplier) || 1);
@@ -667,6 +744,10 @@ export function sanitizeState(state) {
   safe.perks.furnaceRateMultiplier = Math.max(0.1, Number(safe.perks.furnaceRateMultiplier) || 1);
   safe.perks.condenserRateMultiplier = Math.max(0.1, Number(safe.perks.condenserRateMultiplier) || 1);
   safe.perks.prismRateMultiplier = Math.max(0.1, Number(safe.perks.prismRateMultiplier) || 1);
+  safe.perks.kilnRateMultiplier = Math.max(0.1, Number(safe.perks.kilnRateMultiplier) || 1);
+  safe.perks.crucibleRateMultiplier = Math.max(0.1, Number(safe.perks.crucibleRateMultiplier) || 1);
+  safe.perks.aetherSpireRateMultiplier = Math.max(0.1, Number(safe.perks.aetherSpireRateMultiplier) || 1);
+  safe.perks.crucibleSynergyPerPrism = Math.max(0, Number(safe.perks.crucibleSynergyPerPrism) || 0);
   safe.perks.conversionCostMultiplier = Math.max(0.5, Number(safe.perks.conversionCostMultiplier) || 1);
   safe.perks.offlineEfficiencyMultiplier = Math.max(0.5, Number(safe.perks.offlineEfficiencyMultiplier) || 1);
   safe.perks.researchCostMultiplier = Math.max(0.5, Number(safe.perks.researchCostMultiplier) || 1);

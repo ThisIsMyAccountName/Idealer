@@ -1,5 +1,6 @@
 import { ascendCost, ascendShardGainFromResources, generatorCost } from "../engine/formulas.js";
 import { researchCost } from "../game/researchSystem.js";
+import { isUnlockMet } from "../game/unlockRules.js";
 
 const VIEW_STATE_STORAGE_PREFIX = "dimensionalAlchemy.viewState";
 const VALID_MAIN_TABS = new Set(["upgrades", "research", "expeditions", "collection", "dungeons", "ascend"]);
@@ -10,6 +11,30 @@ const DUNGEON_DIRECTION_LABELS = {
   south: "South",
   west: "West"
 };
+
+const DUNGEON_DOOR_ARROWS = {
+  north: "↑",
+  south: "↓",
+  east: "→",
+  west: "←"
+};
+
+const RIFT_ITEM_ICONS = {
+  dagger: "\u{1F5E1}️",
+  axe: "\u{1FA93}",
+  pickaxe: "⛏️",
+  sword: "⚔️",
+  wood: "\u{1FAB5}",
+  stone: "\u{1FAA8}",
+  herb: "\u{1F33F}",
+  shardDust: "✨",
+  salve: "\u{1F9EA}",
+  tonic: "⚗️"
+};
+
+function riftItemIcon(itemId) {
+  return RIFT_ITEM_ICONS[itemId] || "◈";
+}
 
 function formatIntOrFixed(value, digits = 2) {
   const numeric = Number(value);
@@ -259,9 +284,9 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     dragDropHandled: false,
     rareDropPopups: [],
     rareDropPopupId: 0,
-    dungeonBubbles: [],
-    dungeonBubbleId: 0,
-    dungeonBubbleBound: false,
+    modal: null,
+    dungeonToastBound: false,
+    riftDragSlot: null,
     rareDropTableState: {},
     lastExpeditionSignature: "",
     lastDungeonSignature: "",
@@ -494,39 +519,113 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     ui.good = good;
   }
 
-  function pruneDungeonBubbles(now = Date.now()) {
-    ui.dungeonBubbles = ui.dungeonBubbles.filter((bubble) => bubble.expiresAt > now);
+  function ensureToastContainer() {
+    let container = appEl.querySelector("#rift-toasts");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "rift-toasts";
+      container.className = "rift-toasts";
+      appEl.appendChild(container);
+    }
+    return container;
   }
 
-  function queueDungeonBubble({ roomId, x, y, message, variant = "good", durationMs = 2200 }) {
-    if (!message || typeof roomId !== "string") {
+  // Anchor above the player's *logical* tile (from game state), not the
+  // .rift-cell--player marker — that marker is repainted a frame behind the
+  // real position, so during movement it lags. The destination tile element
+  // itself doesn't move, so its rect is correct immediately.
+  function anchorDungeonToast(el, stackIndex) {
+    const player = systems.dungeons.getStatus().player;
+    let anchorEl = null;
+    if (player && Number.isFinite(player.x) && Number.isFinite(player.y)) {
+      anchorEl = ui.panelEl?.querySelector(
+        `[data-rift-x="${player.x}"][data-rift-y="${player.y}"]`
+      );
+    }
+    if (!anchorEl) {
+      anchorEl = ui.panelEl?.querySelector(".rift-cell--player");
+    }
+    if (!anchorEl) {
       return;
     }
-    const tileX = Math.floor(Number(x));
-    const tileY = Math.floor(Number(y));
-    if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
-      return;
-    }
-
-    const now = Date.now();
-    pruneDungeonBubbles(now);
-    ui.dungeonBubbleId += 1;
-    ui.dungeonBubbles.push({
-      id: ui.dungeonBubbleId,
-      roomId,
-      x: tileX,
-      y: tileY,
-      message: String(message),
-      variant,
-      expiresAt: now + clamp(Math.floor(Number(durationMs) || 2200), 600, 7000)
-    });
-
-    if (ui.dungeonBubbles.length > 40) {
-      ui.dungeonBubbles = ui.dungeonBubbles.slice(ui.dungeonBubbles.length - 40);
-    }
+    const r = anchorEl.getBoundingClientRect();
+    const gap = 6;
+    const step = el.offsetHeight + 4;
+    el.style.left = `${r.left + r.width / 2}px`;
+    el.style.top = `${r.top - el.offsetHeight - gap - stackIndex * step}px`;
+    el.classList.add("rift-toast--anchored");
   }
 
-  function formatDungeonLootBubbleText(loot) {
+  function scheduleToastDismiss(el, duration) {
+    if (el._dismissTimer) {
+      clearTimeout(el._dismissTimer);
+    }
+    el._dismissTimer = setTimeout(() => {
+      if (!el.isConnected) {
+        return;
+      }
+      el.classList.add("rift-toast--out");
+      setTimeout(() => el.remove(), 280);
+    }, duration);
+  }
+
+  function createDungeonToast(text, variant, duration, stackKey) {
+    const container = ensureToastContainer();
+    const stackIndex = container.children.length;
+    const el = document.createElement("div");
+    el.className = `rift-toast rift-toast--${variant}`;
+    el.textContent = text;
+    if (stackKey) {
+      el.dataset.stackKey = stackKey;
+    }
+    container.appendChild(el);
+    while (container.children.length > 4) {
+      container.firstChild.remove();
+    }
+    anchorDungeonToast(el, stackIndex);
+    scheduleToastDismiss(el, duration);
+    return el;
+  }
+
+  function pushDungeonToast(text, variant = "info", duration = 2600) {
+    if (!text || ui.activeTab !== "dungeons") {
+      return;
+    }
+    createDungeonToast(String(text), variant, duration, null);
+  }
+
+  // Repeated gains of the same item collapse into one toast whose count ticks
+  // up (+1 → +2 → +3 Wood) instead of spawning a new toast each time.
+  function pushDungeonGain(itemId, label, amount, variant = "good", duration = 2600) {
+    if (ui.activeTab !== "dungeons" || !label) {
+      return;
+    }
+    const amt = Math.max(1, Math.floor(Number(amount) || 1));
+    const key = `gain:${itemId || label}`;
+    const container = ensureToastContainer();
+    const existing = Array.from(container.children).find(
+      (c) => c.dataset.stackKey === key && !c.classList.contains("rift-toast--out")
+    );
+    if (existing) {
+      existing._amount = (existing._amount || 0) + amt;
+      existing.textContent = `+${formatInt(existing._amount)} ${label}`;
+      anchorDungeonToast(existing, Array.from(container.children).indexOf(existing));
+      scheduleToastDismiss(existing, duration);
+      existing.animate(
+        [
+          { transform: "translateX(-50%) scale(1)" },
+          { transform: "translateX(-50%) scale(1.14)" },
+          { transform: "translateX(-50%) scale(1)" }
+        ],
+        { duration: 200, easing: "ease-out" }
+      );
+      return;
+    }
+    const el = createDungeonToast(`+${formatInt(amt)} ${label}`, variant, duration, key);
+    el._amount = amt;
+  }
+
+  function formatDungeonLootText(loot) {
     const parts = (Array.isArray(loot) ? loot : [])
       .filter((entry) => entry && entry.collected !== false)
       .map((entry) => {
@@ -535,154 +634,80 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         return count > 0 ? `${formatInt(count)} ${label}` : "";
       })
       .filter(Boolean);
-    return parts.length > 0 ? parts.slice(0, 3).join(", ") : "nothing";
+    return parts.length > 0 ? parts.slice(0, 4).join(", ") : "nothing";
   }
 
-  function formatDungeonPrimaryLootBubbleText(loot) {
-    const first = (Array.isArray(loot) ? loot : [])
-      .find((entry) => entry && entry.collected !== false);
-    if (!first) {
-      return "nothing";
-    }
-    const count = Math.max(0, Math.floor(Number(first.count) || 0));
-    const label = toTitleToken(first.itemName || first.itemId || "item");
-    return `${formatInt(count)}x ${label}`;
-  }
-
-  function setupDungeonInteractionBubbles() {
-    if (ui.dungeonBubbleBound || !eventBus || typeof eventBus.on !== "function") {
+  function setupDungeonToasts() {
+    if (ui.dungeonToastBound || !eventBus || typeof eventBus.on !== "function") {
       return;
     }
-    ui.dungeonBubbleBound = true;
+    ui.dungeonToastBound = true;
 
-    eventBus.on("dungeon:pickup", (payload = {}) => {
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Picked up ${payload.itemName || toTitleToken(payload.itemId || "item")}`,
-        variant: "good"
-      });
+    eventBus.on("dungeon:pickup", (p = {}) => {
+      pushDungeonGain(p.itemId, p.itemName || toTitleToken(p.itemId || "item"), 1, "good");
     });
 
-    eventBus.on("dungeon:gather", (payload = {}) => {
-      const itemName = payload.itemName || toTitleToken(payload.itemId || "resource");
-      const amount = Math.max(0, Math.floor(Number(payload.amount) || 0));
-      const nodeName = String(payload.nodeName || payload.nodeType || "resource").toLowerCase();
-      const message = nodeName.includes("tree")
-        ? `Chopped tree for ${formatInt(amount)} ${itemName}`
-        : `Gathered ${formatInt(amount)} ${itemName}`;
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message,
-        variant: "good"
-      });
+    eventBus.on("dungeon:gather", (p = {}) => {
+      const itemName = p.itemName || toTitleToken(p.itemId || "resource");
+      const amount = Math.max(1, Math.floor(Number(p.amount) || 1));
+      pushDungeonGain(p.itemId, itemName, amount, "good");
     });
 
-    eventBus.on("dungeon:chestOpened", (payload = {}) => {
-      const lootText = formatDungeonLootBubbleText(payload.loot);
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Looted chest for ${lootText}`,
-        variant: "good"
-      });
+    eventBus.on("dungeon:chestOpened", (p = {}) => {
+      pushDungeonToast(`${p.chestName || "Chest"}: ${formatDungeonLootText(p.loot)}`, "good");
     });
 
-    eventBus.on("dungeon:mobDefeated", (payload = {}) => {
-      const lootText = formatDungeonPrimaryLootBubbleText(payload.loot);
-      const mobName = payload.mobName || toTitleToken(payload.mobType || "mob");
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `${mobName} dropped ${lootText}`,
-        variant: "good"
-      });
+    eventBus.on("dungeon:mobDefeated", (p = {}) => {
+      const mobName = p.mobName || toTitleToken(p.mobType || "mob");
+      pushDungeonToast(`Defeated ${mobName} (+${formatDungeonLootText(p.loot)})`, "good");
     });
 
-    eventBus.on("dungeon:drop", (payload = {}) => {
-      const itemName = payload.itemName || toTitleToken(payload.itemId || "item");
-      const count = Math.max(0, Math.floor(Number(payload.count) || 0));
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Dropped ${formatInt(count)}x ${itemName}`,
-        variant: "info",
-        durationMs: 1600
-      });
+    eventBus.on("dungeon:drop", (p = {}) => {
+      const itemName = p.itemName || toTitleToken(p.itemId || "item");
+      pushDungeonToast(`Dropped ${formatInt(p.count || 0)}x ${itemName}`, "info", 1800);
     });
 
-    eventBus.on("dungeon:mobFailed", (payload = {}) => {
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Need power ${formatInt(payload.requiredPower || 0)}`,
-        variant: "bad",
-        durationMs: 1800
-      });
+    eventBus.on("dungeon:combatStart", (p = {}) => {
+      pushDungeonToast(`Engaged ${p.mobName || toTitleToken(p.mobType || "mob")}`, "bad", 2000);
     });
 
-    eventBus.on("dungeon:requirementFailed", (payload = {}) => {
-      const fallbackMessage = payload.requiredItemId
-        ? `Need ${toTitleToken(payload.requiredItemId)}`
-        : "Missing required item";
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: payload.message || fallbackMessage,
-        variant: "bad",
-        durationMs: 1800
-      });
+    eventBus.on("dungeon:consumableUsed", (p = {}) => {
+      pushDungeonToast(`Healed +${formatInt(p.heal || 0)} HP`, "good");
     });
 
-    eventBus.on("dungeon:craft", (payload = {}) => {
-      const outputName = payload.outputName || toTitleToken(payload.outputItemId || "item");
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Crafted ${formatInt(payload.outputCount || 0)} ${outputName}`,
-        variant: "good"
-      });
+    eventBus.on("dungeon:runFailed", (p = {}) => {
+      pushDungeonToast(`Defeated by ${p.mobName || "the rift"} at depth ${formatInt(p.depth || 1)}`, "bad", 4200);
+      setNotice(`You fell to ${p.mobName || "the rift"} at depth ${formatInt(p.depth || 1)}.`, false);
     });
 
-    eventBus.on("dungeon:unlock", (payload = {}) => {
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Unlocked ${toTitleToken(payload.direction || "door")} door`,
-        variant: "info"
-      });
+    eventBus.on("dungeon:relicPurchased", (p = {}) => {
+      pushDungeonToast(`${p.name || "Relic upgrade"} → Lv ${formatInt(p.level || 1)}`, "info");
+      setNotice(`${p.name || "Relic upgrade"} → level ${formatInt(p.level || 1)}.`, true);
     });
 
-    eventBus.on("dungeon:craftStationOpened", (payload = {}) => {
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: "Workbench ready",
-        variant: "info",
-        durationMs: 1600
-      });
+    eventBus.on("dungeon:craft", (p = {}) => {
+      const outputName = p.outputName || toTitleToken(p.outputItemId || "item");
+      pushDungeonToast(`Crafted ${formatInt(p.outputCount || 0)} ${outputName}`, "good");
     });
 
-    eventBus.on("dungeon:descend", (payload = {}) => {
-      queueDungeonBubble({
-        roomId: payload.roomId,
-        x: payload.x,
-        y: payload.y,
-        message: `Descended to depth ${formatInt(payload.nextDepth || 1)}`,
-        variant: "info",
-        durationMs: 2200
-      });
+    eventBus.on("dungeon:descend", (p = {}) => {
+      const r = p.reward || {};
+      pushDungeonToast(
+        `Descended to depth ${formatInt(p.nextDepth || 1)} — +${formatInt(r.matter || 0)} Matter, +${formatInt(r.fire || 0)} Fire, +${formatInt(r.relics || 0)} Relics`,
+        "info",
+        4200
+      );
+      const ex = p.extracted || {};
+      const exText = Object.keys(ex)
+        .map((id) => `${formatInt(ex[id])} ${toTitleToken(id)}`)
+        .join(", ");
+      if (exText) {
+        pushDungeonToast(`Extracted ${exText}`, "good", 4200);
+      }
+    });
+
+    eventBus.on("dungeon:metaCrafted", (p = {}) => {
+      pushDungeonToast(`${p.name || "Workshop"} → Lv ${formatInt(p.level || 1)}`, "good");
     });
   }
 
@@ -708,6 +733,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     const remainingItems = floorItems.filter((item) => !item.pickedUp);
 
     return {
+      wallsByKey: new Set(Array.isArray(room?.walls) ? room.walls : []),
       itemsByKey: new Map(remainingItems.map((item) => [toDungeonTileKey(item.x, item.y), item])),
       gatherByKey: new Map(gatherNodes.filter((node) => Number(node.remainingCharges || 0) > 0).map((node) => [toDungeonTileKey(node.x, node.y), node])),
       mobsByKey: new Map(livingMobs.map((mob) => [toDungeonTileKey(mob.x, mob.y), mob])),
@@ -720,95 +746,103 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     };
   }
 
-  function getDungeonBubblesByKey(activeRoomId) {
-    const bubblesByKey = new Map();
-    ui.dungeonBubbles.forEach((bubble) => {
-      if (bubble.roomId !== activeRoomId) {
-        return;
-      }
-      const key = toDungeonTileKey(bubble.x, bubble.y);
-      const existing = bubblesByKey.get(key) || [];
-      existing.push(bubble);
-      bubblesByKey.set(key, existing.slice(-3));
-    });
-    return bubblesByKey;
-  }
 
-  function getDungeonTilePresentation({ room, player, movement, tileMaps, bubblesByKey, x, y }) {
+  function getDungeonTilePresentation({ room, player, movement, combat, tileMaps, bossRoomIds, x, y }) {
     const key = toDungeonTileKey(x, y);
+    const isWall = tileMaps.wallsByKey.has(key);
     const door = tileMaps.doorsByKey.get(key);
     const item = tileMaps.itemsByKey.get(key);
     const gather = tileMaps.gatherByKey.get(key);
     const mob = tileMaps.mobsByKey.get(key);
     const chest = tileMaps.chestsByKey.get(key);
-    const specialCrafting = room.special?.type === "crafting" && room.special.x === x && room.special.y === y;
     const specialDescend = room.special?.type === "descend" && room.special.x === x && room.special.y === y;
     const isPlayer = player.x === x && player.y === y;
     const isTarget = Boolean(movement) && movement.target?.x === x && movement.target?.y === y;
+    const combatMobId = combat?.mobId || null;
 
     let token = "";
     let title = `Tile (${x}, ${y})`;
+    let blocked = false;
+    let interactive = false;
+    let subLabel = "";
     const classes = ["rift-cell"];
 
+    if (isWall && !door) {
+      classes.push("rift-cell--wall");
+      title = "Solid rock";
+      blocked = true;
+    }
     if (door) {
       if (door.blocked) {
         classes.push("rift-cell--door-blocked");
-        token = "X";
-        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} Door: collapsed`;
-      } else if (door.unlocked) {
-        classes.push("rift-cell--door-open");
-        token = (DUNGEON_DIRECTION_LABELS[door.direction] || "D").charAt(0);
-        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} Door: open`;
+        token = "▩";
+        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} doorway: collapsed`;
+        blocked = true;
+      } else if (bossRoomIds && bossRoomIds.has(door.targetRoomId)) {
+        classes.push("rift-cell--door-open", "rift-cell--door-boss");
+        token = "☠";
+        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} doorway — BOSS beyond`;
+        interactive = true;
       } else {
-        classes.push("rift-cell--door-locked");
-        token = "L";
-        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} Door: locked (${door.lockTag || "key"})`;
+        classes.push("rift-cell--door-open");
+        token = DUNGEON_DOOR_ARROWS[door.direction] || "D";
+        title = `${DUNGEON_DIRECTION_LABELS[door.direction] || door.direction} doorway`;
+        interactive = true;
       }
     }
     if (gather) {
       classes.push("rift-cell--gather");
-      token = gather.nodeType === "tree" ? "T" : "R";
-      title = `${gather.name} (${formatInt(gather.remainingCharges)} charges)`;
+      token = gather.nodeType === "tree" ? "♣" : gather.nodeType === "herb" ? "❀" : "⬢";
+      title = `${gather.name} (${formatInt(gather.remainingCharges)} left)`;
+      interactive = true;
     }
     if (item) {
       classes.push("rift-cell--item");
-      token = "I";
+      token = riftItemIcon(item.itemId);
       title = `Item: ${item.name}`;
+      interactive = true;
     }
     if (chest) {
       classes.push("rift-cell--chest");
-      token = "C";
+      token = "▣";
       title = `Chest: ${chest.name}`;
+      interactive = true;
     }
     if (mob) {
       classes.push("rift-cell--mob");
-      token = "M";
-      title = `${mob.name} (power ${formatInt(mob.requiredPower || 1)})`;
-    }
-    if (specialCrafting) {
-      classes.push("rift-cell--crafting");
-      token = "W";
-      title = `${room.special?.name || "Workbench"}`;
+      interactive = true;
+      token = mob.boss ? "☠" : mob.gate ? "⚔" : "☠";
+      subLabel = `${formatInt(mob.power || 1)}⚔ ${formatInt(mob.hp || 0)}♥`;
+      const role = mob.boss ? " (BOSS)" : mob.gate ? " (blocking)" : "";
+      title = `${mob.name}${role} — power ${formatInt(mob.power || 1)}, HP ${formatInt(mob.hp || 0)}/${formatInt(mob.maxHp || 0)}`;
+      if (mob.boss) {
+        classes.push("rift-cell--boss");
+      } else if (mob.gate) {
+        classes.push("rift-cell--gate");
+      }
+      if (combatMobId && mob.mobId === combatMobId) {
+        classes.push("rift-cell--combat");
+        title = `${title} | In combat`;
+      }
     }
     if (specialDescend) {
       classes.push("rift-cell--descend");
-      token = "O";
-      title = "Descend Hole";
+      token = "✺";
+      title = "Black Hole — descend";
+      interactive = true;
     }
     if (isPlayer) {
       classes.push("rift-cell--player");
-      token = "P";
+      token = "◉";
       title = `${title} | You are here`;
     }
     if (isTarget) {
       classes.push("rift-cell--target");
-      title = `${title} | Movement target`;
+      title = `${title} | Moving here`;
     }
-
-    const tileBubbles = bubblesByKey.get(key) || [];
-    const bubbleMarkup = tileBubbles
-      .map((bubble, index) => `<span class="rift-cell-bubble rift-cell-bubble--${bubble.variant || "info"}" style="--bubble-index:${index};">${escapeHtml(bubble.message)}</span>`)
-      .join("");
+    if (interactive && !isPlayer) {
+      classes.push("rift-cell--interactive");
+    }
 
     return {
       x,
@@ -816,13 +850,14 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       classes,
       title,
       token,
+      subLabel,
       isTarget,
-      bubbleMarkup
+      blocked
     };
   }
 
   function renderDungeonTileInnerMarkup(tile) {
-    return `${tile.token ? `<span class="rift-cell-token">${tile.token}</span>` : ""}${tile.isTarget ? '<span class="rift-cell-target-marker">X</span>' : ""}${tile.bubbleMarkup}`;
+    return `${tile.token ? `<span class="rift-cell-token">${tile.token}</span>` : ""}${tile.subLabel ? `<span class="rift-cell-stat">${escapeHtml(tile.subLabel)}</span>` : ""}${tile.isTarget ? '<span class="rift-cell-target-marker">×</span>' : ""}`;
   }
 
   function renderDungeonTileButtonMarkup(tile) {
@@ -833,6 +868,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         data-rift-x="${tile.x}"
         data-rift-y="${tile.y}"
         title="${escapeHtml(tile.title)}"
+        ${tile.blocked ? "disabled" : ""}
       >
         ${renderDungeonTileInnerMarkup(tile)}
       </button>
@@ -853,29 +889,24 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       return null;
     }
 
-    pruneDungeonBubbles();
-
     const player = status.player || run.player || { x: 0, y: 0 };
     const movement = status.movement || run.movement || null;
     const roomId = room.roomId || run.currentRoomId || "";
-    const bubbleKeys = new Set();
-    const bubbleTokens = [];
-    ui.dungeonBubbles.forEach((bubble) => {
-      if (bubble.roomId === roomId) {
-        bubbleKeys.add(toDungeonTileKey(bubble.x, bubble.y));
-        bubbleTokens.push(`${bubble.id}:${bubble.x}:${bubble.y}`);
-      }
-    });
+    const bossRoomIds = new Set(
+      Object.values(run.rooms || {})
+        .filter((r) => r.isBoss && (r.mobs || []).some((m) => m.boss && m.alive))
+        .map((r) => r.roomId)
+    );
 
     return {
       room,
       roomId,
       player,
       movement,
+      bossRoomIds,
+      combat: status.combat || run.combat || null,
       playerKey: toDungeonTileKey(player.x, player.y),
-      targetKey: movement?.target ? toDungeonTileKey(movement.target.x, movement.target.y) : "",
-      bubbleKeys,
-      bubbleSignature: bubbleTokens.join(",")
+      targetKey: movement?.target ? toDungeonTileKey(movement.target.x, movement.target.y) : ""
     };
   }
 
@@ -886,9 +917,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     return {
       roomId: snapshot.roomId,
       playerKey: snapshot.playerKey,
-      targetKey: snapshot.targetKey,
-      bubbleKeys: Array.from(snapshot.bubbleKeys),
-      bubbleSignature: snapshot.bubbleSignature
+      targetKey: snapshot.targetKey
     };
   }
 
@@ -915,11 +944,6 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       .filter((key) => Boolean(key))
       .forEach((key) => keysToRefresh.add(key));
 
-    if ((previous.bubbleSignature || "") !== (snapshot.bubbleSignature || "")) {
-      (Array.isArray(previous.bubbleKeys) ? previous.bubbleKeys : []).forEach((key) => keysToRefresh.add(key));
-      snapshot.bubbleKeys.forEach((key) => keysToRefresh.add(key));
-    }
-
     const posXEl = ui.panelEl.querySelector("[data-dungeon-pos-x]");
     const posYEl = ui.panelEl.querySelector("[data-dungeon-pos-y]");
     if (posXEl) {
@@ -935,7 +959,6 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
 
     const tileMaps = getDungeonTileMaps(snapshot.room);
-    const bubblesByKey = getDungeonBubblesByKey(snapshot.roomId);
 
     keysToRefresh.forEach((key) => {
       const tilePos = parseDungeonTileKey(key);
@@ -951,8 +974,9 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         room: snapshot.room,
         player: snapshot.player,
         movement: snapshot.movement,
+        combat: snapshot.combat,
         tileMaps,
-        bubblesByKey,
+        bossRoomIds: snapshot.bossRoomIds,
         x: tilePos.x,
         y: tilePos.y
       });
@@ -998,6 +1022,46 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       })
       .join("");
     hydrateUiIcons(refs.rarePopupStack);
+  }
+
+  function renderModal() {
+    if (!refs.modalOverlay) {
+      return;
+    }
+    const modal = ui.modal;
+    if (!modal) {
+      refs.modalOverlay.innerHTML = "";
+      refs.modalOverlay.classList.add("hidden");
+      return;
+    }
+    refs.modalOverlay.classList.remove("hidden");
+    refs.modalOverlay.innerHTML = `
+      <div class="modal" role="document">
+        <h2 class="modal__title" id="modal-title">${modal.title || ""}</h2>
+        <div class="modal__body">${modal.body || ""}</div>
+        <div class="modal__actions">
+          <button class="ghost modal__cancel" data-action="modal:cancel">${modal.cancelLabel || "Cancel"}</button>
+          <button class="primary modal__confirm" data-action="modal:confirm">${modal.confirmLabel || "Confirm"}</button>
+        </div>
+      </div>
+    `;
+    const confirmBtn = refs.modalOverlay.querySelector(".modal__confirm");
+    if (confirmBtn) {
+      confirmBtn.focus();
+    }
+  }
+
+  function openModal(modal) {
+    ui.modal = modal || null;
+    renderModal();
+  }
+
+  function closeModal() {
+    if (!ui.modal) {
+      return;
+    }
+    ui.modal = null;
+    renderModal();
   }
 
   function showRareDropPopup(drops) {
@@ -1145,21 +1209,75 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
   }
 
+  function getPooledBaseProduction() {
+    let pooled = 0;
+    Object.values(generatorDefs).forEach((def) => {
+      if (def.meta) {
+        return;
+      }
+      const level = state.generators[def.id] || 0;
+      if (level <= 0) {
+        return;
+      }
+      let rate = def.baseRate * level;
+      if (def.rateMultiplierPerk) {
+        rate *= state.perks[def.rateMultiplierPerk] || 1;
+      }
+      if (def.synergy) {
+        const synergyLevel = state.generators[def.synergy.generator] || 0;
+        rate *= 1 + (state.perks[def.synergy.perk] || 0) * synergyLevel;
+      }
+      pooled += rate;
+    });
+    return pooled;
+  }
+
   function getGeneratorIncrementRate(def) {
+    if (def.meta) {
+      const spireMult = def.rateMultiplierPerk
+        ? state.perks[def.rateMultiplierPerk] || 1
+        : 1;
+      const pooled = getPooledBaseProduction();
+      const split = def.meta.split ?? 0.5;
+      const perLevelBonus = def.baseRate * spireMult * pooled;
+      const matterPart = perLevelBonus * split
+        * state.perks.productionMultiplier * state.perks.matterRateMultiplier;
+      const firePart = perLevelBonus * (1 - split)
+        * state.perks.productionMultiplier * state.perks.fireRateMultiplier;
+      return matterPart + firePart;
+    }
     let rate = def.baseRate;
-    if (def.id === "furnace") {
-      rate *= state.perks.furnaceRateMultiplier || 1;
+    if (def.rateMultiplierPerk) {
+      rate *= state.perks[def.rateMultiplierPerk] || 1;
     }
-    if (def.id === "condenser") {
-      rate *= state.perks.condenserRateMultiplier || 1;
-    }
-    if (def.id === "prism") {
-      rate *= state.perks.prismRateMultiplier || 1;
+    if (def.synergy) {
+      const synergyLevel = state.generators[def.synergy.generator] || 0;
+      rate *= 1 + (state.perks[def.synergy.perk] || 0) * synergyLevel;
     }
     const resourceMultiplier = def.resource === "matter"
       ? state.perks.matterRateMultiplier
       : state.perks.fireRateMultiplier;
     return rate * state.perks.productionMultiplier * resourceMultiplier;
+  }
+
+  function describeGeneratorUnlock(unlock) {
+    if (!unlock || !unlock.type) {
+      return "";
+    }
+    if (unlock.type === "matterSeen") {
+      return `Reach ${formatNumber(unlock.value)} lifetime Matter`;
+    }
+    if (unlock.type === "fireSeen") {
+      return `Reach ${formatNumber(unlock.value)} lifetime Fire`;
+    }
+    if (unlock.type === "ascensions") {
+      return `Ascend ${unlock.value} time${unlock.value === 1 ? "" : "s"}`;
+    }
+    if (unlock.type === "generatorOwned") {
+      const genName = generatorDefs[unlock.generator]?.name || unlock.generator;
+      return `Own ${unlock.value} ${genName}`;
+    }
+    return "Locked";
   }
 
   function isExpeditionUnlocked() {
@@ -1240,6 +1358,15 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         </div>
         <div class="debug-panel__depth-controls">
           ${actionButton("Validate Rift x100", "ghost compact", "debug:validate-rift")}
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <div class="kv">Completed Save</div>
+          <div class="kv">Overwrites the active slot with a maxed endgame state for testing.</div>
+        </div>
+        <div class="debug-panel__depth-controls">
+          ${actionButton("Load Completed Save", "ghost compact", "debug:load-completed")}
         </div>
       </div>
       ${generatorRows}
@@ -1410,6 +1537,8 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
 
       <section class="rare-popup-stack hidden" id="rare-popup-stack" aria-live="polite" aria-atomic="false"></section>
 
+      <div class="modal-overlay hidden" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
+
       <section class="panel debug-panel hidden" id="debug-panel"></section>
     `;
 
@@ -1424,6 +1553,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     refs.dungeonsTab = appEl.querySelector('button[data-action="tab:dungeons"]');
     refs.mainGrid = appEl.querySelector("#main-grid");
     refs.rarePopupStack = appEl.querySelector("#rare-popup-stack");
+    refs.modalOverlay = appEl.querySelector("#modal-overlay");
     ui.pinnedEl = appEl.querySelector("#pinned-panel");
     refs.saveSlot = appEl.querySelector("#save-slot");
     refs.saveReset = appEl.querySelector("[data-action='save-reset']");
@@ -1463,14 +1593,30 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     const generatorRows = Object.values(generatorDefs)
       .map((def) => {
         const level = state.generators[def.id] || 0;
+        const unlocked = !def.unlock || isUnlockMet(state, def.unlock);
+
+        if (!unlocked && level <= 0) {
+          return `
+          <div class="row row--locked">
+            <div>
+              <div><strong>${def.name}</strong> <span class="kv">Locked</span></div>
+              <div class="kv">Unlock: ${describeGeneratorUnlock(def.unlock)}</div>
+            </div>
+          </div>
+        `;
+        }
+
         const cost = generatorCost(def, level, state.perks.generatorCostGrowthMultiplier);
         const effectiveRate = getGeneratorIncrementRate(def);
+        const resourceIcon = def.resource === "both"
+          ? `${renderCurrencyIcon("matter")}${renderCurrencyIcon("fire")}`
+          : renderCurrencyIcon(def.resource);
 
         return `
           <div class="row">
             <div>
               <div><strong>${def.name}</strong> Lv.${level}</div>
-              <div class="kv">+${formatNumber(effectiveRate)}/s ${renderCurrencyIcon(def.resource)} | Cost ${formatCurrencyAmount(def.costResource, cost)}</div>
+              <div class="kv">+${formatNumber(effectiveRate)}/s ${resourceIcon} | Cost ${formatCurrencyAmount(def.costResource, cost)}</div>
             </div>
             ${actionButton("Buy", "ghost", `buy:${def.id}`)}
           </div>
@@ -2361,6 +2507,75 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     `;
   }
 
+  function renderRelicTree(status) {
+    const nodes = Array.isArray(status.relicTree) ? status.relicTree : [];
+    if (nodes.length === 0) {
+      return "";
+    }
+    const cards = nodes
+      .map((node) => {
+        const label = node.maxed
+          ? "Maxed"
+          : `Buy (${formatInt(node.cost)} relic${node.cost === 1 ? "" : "s"})`;
+        return `
+          <div class="rift-relic-card${node.maxed ? " rift-relic-card--maxed" : ""}">
+            <div class="rift-relic-head">
+              <strong>${node.name}</strong>
+              <span class="kv">Lv ${formatInt(node.level)}/${formatInt(node.maxLevel)}</span>
+            </div>
+            <div class="kv">${node.desc}</div>
+            ${actionButton(label, "secondary compact", `dungeon:relic:${node.id}`, node.maxed || !node.canAfford)}
+          </div>
+        `;
+      })
+      .join("");
+    return `
+      <div class="rift-relic-tree">
+        <h3>Relic Upgrades</h3>
+        <div class="rift-relic-grid">${cards}</div>
+      </div>
+    `;
+  }
+
+  function renderMetaWorkshop(status) {
+    const crafts = Array.isArray(status.metaCraftList) ? status.metaCraftList : [];
+    if (crafts.length === 0) {
+      return "";
+    }
+    const resList = Array.isArray(status.metaResources) ? status.metaResources : [];
+    const resLine = resList.length
+      ? resList.map((r) => `${escapeHtml(r.name)}: <strong>${formatInt(r.count)}</strong>`).join(" &nbsp;|&nbsp; ")
+      : "<span class=\"kv\">No materials yet — find them in the rift and descend to keep them.</span>";
+    const cards = crafts
+      .map((c) => {
+        const costText = c.maxed
+          ? "Maxed"
+          : c.cost
+              .map((x) => `<span class="${x.have >= x.amount ? "" : "rift-cost-short"}">${formatInt(x.amount)} ${escapeHtml(x.name)}</span>`)
+              .join(" + ");
+        const label = c.maxed ? "Maxed" : "Craft";
+        return `
+          <div class="rift-relic-card${c.maxed ? " rift-relic-card--maxed" : ""}">
+            <div class="rift-relic-head">
+              <strong>${escapeHtml(c.name)}</strong>
+              <span class="kv">Lv ${formatInt(c.level)}/${formatInt(c.maxLevel)}</span>
+            </div>
+            <div class="kv">${escapeHtml(c.desc)}</div>
+            <div class="kv">${costText}</div>
+            ${actionButton(label, "secondary compact", `dungeon:metacraft:${c.id}`, c.maxed || !c.canAfford)}
+          </div>
+        `;
+      })
+      .join("");
+    return `
+      <div class="rift-relic-tree">
+        <h3>Workshop</h3>
+        <div class="kv rift-meta-res">${resLine}</div>
+        <div class="rift-relic-grid">${cards}</div>
+      </div>
+    `;
+  }
+
   function renderDungeonsPanel() {
     const status = systems.dungeons.getStatus();
     if (!status.unlocked) {
@@ -2368,30 +2583,35 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
 
     const meta = status.meta || {};
+    const relics = formatInt(status.relics || 0);
     const relicsEarned = formatInt(status.rewards?.lifetime?.relicsEarned || 0);
     if (!status.activeRun) {
       return `
         <div class="row">
           <div>
-            <div><strong>Depth ${formatInt(meta.depth || 1)}</strong></div>
-            <div class="kv">Best ${formatInt(meta.bestDepth || 1)} | Descends ${formatInt(meta.totalDescends || 0)} | Rooms Cleared ${formatInt(meta.totalRoomsCleared || 0)} | Relics ${relicsEarned}</div>
+            <div><strong>Depth ${formatInt(meta.depth || 1)}</strong> &middot; <strong>${relics}</strong> relics</div>
+            <div class="kv">Best ${formatInt(meta.bestDepth || 1)} | Descends ${formatInt(meta.totalDescends || 0)} | Rooms Cleared ${formatInt(meta.totalRoomsCleared || 0)} | Lifetime Relics ${relicsEarned}</div>
           </div>
           ${actionButton("Start Run", "primary", "dungeon:start")}
         </div>
+        ${renderMetaWorkshop(status)}
+        ${renderRelicTree(status)}
       `;
     }
 
-    const room = status.currentRoom || { floorItems: [], gatherNodes: [], mobs: [], chests: [], doors: {}, grid: { width: 15, height: 15 } };
+    const room = status.currentRoom || { floorItems: [], gatherNodes: [], mobs: [], chests: [], doors: {}, walls: [], grid: { width: 13, height: 13 } };
     const run = status.activeRun;
     const movement = status.movement;
-    const crafting = status.crafting || {};
-    const craftingVisible = Boolean(crafting.stationOpen && crafting.stationRoomId === room.roomId);
-    pruneDungeonBubbles();
+    const combat = status.combat;
+    const busy = Boolean(movement) || Boolean(combat);
     const player = status.player || run.player || { x: 0, y: 0 };
-    const grid = room.grid || { width: 15, height: 15 };
+    const grid = room.grid || { width: 13, height: 13 };
     const tileMaps = getDungeonTileMaps(room);
-    const activeBubbleRoomId = room.roomId || run.currentRoomId || "";
-    const bubblesByKey = getDungeonBubblesByKey(activeBubbleRoomId);
+    const bossRoomIds = new Set(
+      Object.values(run?.rooms || {})
+        .filter((r) => r.isBoss && (r.mobs || []).some((m) => m.boss && m.alive))
+        .map((r) => r.roomId)
+    );
 
     const tileButtons = [];
     for (let y = 0; y < grid.height; y += 1) {
@@ -2400,13 +2620,64 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
           room,
           player,
           movement,
+          combat,
           tileMaps,
-          bubblesByKey,
+          bossRoomIds,
           x,
           y
         });
         tileButtons.push(renderDungeonTileButtonMarkup(tile));
       }
+    }
+
+    const hp = Math.max(0, Math.floor(status.playerHp || 0));
+    const maxHp = Math.max(1, Math.floor(status.playerMaxHp || 1));
+    const hpPct = clamp(Math.round((hp / maxHp) * 100), 0, 100);
+
+    const combatMob = combat
+      ? (room.mobs || []).find((m) => m.mobId === combat.mobId)
+      : null;
+    const combatBanner = combatMob
+      ? `<div class="rift-combat">Fighting <strong>${combatMob.name}</strong> — HP ${formatInt(combatMob.hp)}/${formatInt(combatMob.maxHp)} (auto-resolving)</div>`
+      : "";
+
+    const map = status.map;
+    let mapStrip = "";
+    if (map && Array.isArray(map.nodes)) {
+      const byKey = new Map(map.nodes.map((n) => [`${n.x},${n.y}`, n]));
+      const cells = [];
+      for (let dy = -2; dy <= 2; dy += 1) {
+        for (let dx = -2; dx <= 2; dx += 1) {
+          const n = byKey.get(`${map.currentX + dx},${map.currentY + dy}`);
+          if (!n) {
+            cells.push('<span class="rift-mm-cell"></span>');
+            continue;
+          }
+          const boss = n.isBoss && !n.bossCleared;
+          const cls = [
+            "rift-mm-cell",
+            "rift-mm-cell--room",
+            n.explored ? "rift-mm-cell--explored" : "rift-mm-cell--known",
+            n.isCurrent ? "rift-mm-cell--current" : "",
+            n.isDescend ? "rift-mm-cell--descend" : "",
+            boss ? "rift-mm-cell--boss" : ""
+          ]
+            .filter(Boolean)
+            .join(" ");
+          const glyph = boss ? "☠" : n.isDescend ? "✺" : n.isCurrent ? "◉" : "";
+          const label = boss
+            ? "Boss room"
+            : n.isDescend
+              ? "Exit"
+              : n.isCurrent
+                ? "You are here"
+                : n.explored
+                  ? "Explored"
+                  : "Unexplored";
+          cells.push(`<span class="${cls}" title="${label}">${glyph}</span>`);
+        }
+      }
+      mapStrip = `<div class="rift-mm" aria-label="Minimap">${cells.join("")}</div>`;
     }
 
     const craftingRows = (Array.isArray(status.recipes) ? status.recipes : [])
@@ -2419,65 +2690,80 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         return `
           <div class="row">
             <div class="kv">${recipe.name}: ${costs} -> ${outputCount} ${outputName}</div>
-            ${actionButton("Craft", "secondary compact", `dungeon:craft:${recipe.id}`, !recipe.canCraft || Boolean(movement))}
+            ${actionButton("Craft", "secondary compact", `dungeon:craft:${recipe.id}`, !recipe.canCraft || busy)}
           </div>
         `;
       })
       .join("");
 
-    const craftingInventoryPopup = craftingVisible
-      ? `
-        <div class="rift-crafting-popup rift-crafting-popup--inventory">
-          <div class="rift-crafting-popup__header">
-            <h3>Workbench</h3>
-            ${actionButton("Close", "ghost compact", "dungeon:craft-close")}
-          </div>
-          <div class="rift-crafting-popup__body">
-            ${craftingRows || "<div class=\"kv\">No recipes available.</div>"}
-          </div>
+    const craftingPanel = `
+      <div class="rift-craft">
+        <h3>Crafting</h3>
+        <div class="rift-craft-body">
+          ${craftingRows || "<div class=\"kv\">No recipes available.</div>"}
         </div>
-      `
-      : "";
+      </div>
+    `;
 
     const inventorySlots = (status.inventory?.slots || []).map((slot, index) => {
       if (!slot) {
-        return `<div class="rift-slot"><span class="kv">Slot ${index + 1}</span><div class="muted">Empty</div></div>`;
+        return `<div class="rift-cellslot rift-cellslot--empty" title="Empty slot"></div>`;
       }
+      const isConsumable = slot.itemType === "consumable";
+      const useBtn = isConsumable
+        ? `<button class="rift-cellslot-act" data-action="dungeon:use-slot:${index}" title="Use ${escapeHtml(slot.name)}"${hp >= maxHp ? " disabled" : ""}>use</button>`
+        : "";
+      const dropBtn = `<button class="rift-cellslot-act rift-cellslot-act--drop" data-action="dungeon:drop-slot:${index}" title="Drop one ${escapeHtml(slot.name)}"${busy ? " disabled" : ""}>⤓</button>`;
       return `
-        <div class="rift-slot">
-          <span class="kv">Slot ${index + 1}</span>
-          <div class="rift-slot-row">
-            <div><strong>${slot.name}</strong> x${formatInt(slot.count || 0)}</div>
-            <div class="rift-slot-actions">${actionButton("Drop 1", "ghost compact", `dungeon:drop-slot:${index}`, Boolean(movement))}</div>
-          </div>
+        <div class="rift-cellslot" draggable="true" data-rift-slot="${index}" title="${escapeHtml(slot.name)} ×${formatInt(slot.count || 0)} — drag onto the room to drop">
+          <span class="rift-cellslot-ico">${riftItemIcon(slot.itemId)}</span>
+          <span class="rift-cellslot-ct">${formatInt(slot.count || 0)}</span>
+          <span class="rift-cellslot-acts">${useBtn}${dropBtn}</span>
         </div>
       `;
     }).join("");
 
     const descendAction = room.special?.type === "descend"
-      ? `<div class="row">${actionButton("Descend", "primary", "dungeon:descend", Boolean(movement))}<div class="kv">Black hole soft-resets this system and increases depth.</div></div>`
+      ? `<div class="row">${actionButton("Descend", "primary", "dungeon:descend", busy)}<div class="kv">The black hole ends the run, banks rewards, and deepens the rift.</div></div>`
       : "";
 
     return `
       <div class="row">
         <div>
-          <div><strong>${room.name || "Unknown Room"}</strong> | Depth ${formatInt(run.depth || 1)}</div>
-          <div class="kv">${room.description || ""} | Combat power ${formatInt(status.playerPower || 1)} | Pos (<span data-dungeon-pos-x>${formatInt(player.x)}</span>, <span data-dungeon-pos-y>${formatInt(player.y)}</span>) | Relics ${relicsEarned}</div>
+          <div><strong>${room.name || "Unknown Room"}</strong></div>
+          <div class="kv">${room.description || ""}</div>
         </div>
         ${actionButton("Abandon", "ghost", "dungeon:abandon")}
       </div>
 
+      <div class="rift-stats">
+        <span class="rift-stat"><span class="rift-stat-k">HP</span>${formatInt(hp)}/${formatInt(maxHp)}</span>
+        <span class="rift-stat"><span class="rift-stat-k">Power</span>${formatInt(status.playerPower || 1)}</span>
+        <span class="rift-stat"><span class="rift-stat-k">Depth</span>${formatInt(run.depth || 1)}</span>
+        <span class="rift-stat"><span class="rift-stat-k">Relics</span>${relics}</span>
+        <span class="rift-stat"><span class="rift-stat-k">Pos</span>(<span data-dungeon-pos-x>${formatInt(player.x)}</span>,<span data-dungeon-pos-y>${formatInt(player.y)}</span>)</span>
+      </div>
+
+      <div class="rift-hpbar" title="Health">
+        <div class="rift-hpbar-fill" data-rift-hp-fill style="width:${hpPct}%;"></div>
+        <span class="rift-hpbar-text" data-rift-hp-text>HP ${formatInt(hp)}/${formatInt(maxHp)}</span>
+      </div>
+      ${combatBanner}
+
       <div class="rift-room-layout">
         <aside class="rift-room-sidebar">
-          <h3>Inventory (6 Slots)</h3>
-          <div class="rift-inventory-grid">${inventorySlots}</div>
-          ${craftingInventoryPopup}
+          ${mapStrip ? `${mapStrip}` : ""}
+          <h3>Inventory (${formatInt((status.inventory?.slots || []).length)})</h3>
+          <div class="rift-inv">${inventorySlots}</div>
+          ${craftingPanel}
         </aside>
 
         <div class="rift-room-main">
-          <div class="rift-grid-wrap">
-            <div class="rift-grid-board" style="--cols:${grid.width};--rows:${grid.height};">
-              ${tileButtons.join("")}
+          <div class="rift-grid-wrap" data-rift-dropzone>
+            <div class="rift-grid-stage">
+              <div class="rift-grid-board" style="--cols:${grid.width};--rows:${grid.height};">
+                ${tileButtons.join("")}
+              </div>
             </div>
           </div>
 
@@ -2586,29 +2872,41 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
   }
 
   function getDungeonRenderSignature() {
-    pruneDungeonBubbles();
     const status = systems.dungeons.getStatus();
     const run = status.activeRun;
     const room = status.currentRoom;
     const doorSignature = Object.values(room?.doors || {})
-      .map((door) => `${door.direction}:${door.unlocked ? 1 : 0}:${door.blocked ? 1 : 0}:${door.requiredKeys || 0}`)
+      .map((door) => `${door.direction}:${door.blocked ? 1 : 0}:${door.targetRoomId || ""}`)
       .join(",");
+    const relicUpgrades = status.activeRun
+      ? ""
+      : (status.relicTree || []).map((n) => `${n.id}:${n.level}`).join(",");
+    const metaState = status.activeRun
+      ? ""
+      : (status.metaCraftList || []).map((c) => `${c.id}:${c.level}`).join(",") +
+        "|" +
+        (status.metaResources || []).map((r) => `${r.itemId}:${r.count}`).join(",");
     return [
+      metaState,
       status.unlocked ? 1 : 0,
       status.meta?.depth || 0,
+      status.meta?.bestDepth || 0,
       status.meta?.totalDescends || 0,
-      status.rewards?.lifetime?.relicsEarned || 0,
-      status.crafting?.stationOpen ? 1 : 0,
-      status.crafting?.stationRoomId || "",
+      status.meta?.totalRoomsCleared || 0,
+      status.relics || 0,
+      relicUpgrades,
       status.playerPower || 0,
+      `${status.playerHp ?? 0}/${status.playerMaxHp ?? 0}`,
       run?.runId || "",
       run?.currentRoomId || "",
+      Array.isArray(run?.revealed) ? run.revealed.length : 0,
       run?.movement ? 1 : 0,
       run?.movement?.target?.x ?? -1,
       run?.movement?.target?.y ?? -1,
+      status.combat?.mobId || "",
       Array.isArray(room?.floorItems) ? room.floorItems.filter((item) => !item.pickedUp).length : 0,
       Array.isArray(room?.gatherNodes) ? room.gatherNodes.map((node) => node.remainingCharges || 0).join(",") : "",
-      Array.isArray(room?.mobs) ? room.mobs.filter((mob) => mob.alive).length : 0,
+      Array.isArray(room?.mobs) ? room.mobs.filter((mob) => mob.alive).map((mob) => mob.hp).join(",") : "",
       Array.isArray(room?.chests) ? room.chests.filter((chest) => !chest.opened).length : 0,
       room?.special?.type || "",
       doorSignature,
@@ -2774,6 +3072,10 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       return;
     }
     appEl.addEventListener("click", (event) => {
+      if (ui.modal && event.target.closest("#modal-overlay") && !event.target.closest(".modal")) {
+        closeModal();
+        return;
+      }
       const target = event.target.closest("button[data-action]");
       if (!target || target.disabled) {
         return;
@@ -2866,6 +3168,20 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         ui.lastDebugRefreshAt = 0;
         refreshDebugPanelMetrics();
         renderPanel();
+      } else if (action === "debug:load-completed") {
+        if (typeof debugOptions?.loadCompletedSave !== "function") {
+          setNotice("Completed save loader is not available.", false);
+          refreshHud();
+          return;
+        }
+        openModal({
+          kind: "debug-load-completed",
+          title: "Load Completed Save?",
+          body: "This <strong>overwrites the active save slot</strong> with a maxed endgame state (generators, upgrades, research, ascension tree, expeditions, and Rift Delve). This cannot be undone.",
+          confirmLabel: "Overwrite & Load",
+          cancelLabel: "Cancel"
+        });
+        return;
       } else if (action === "transmute") {
         systems.actions.manualTransmute();
         setNotice("Matter transmuted.", true);
@@ -2881,15 +3197,28 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       } else if (action === "ascend") {
         const ascendGain = Math.max(1, ascendShardGainFromResources(state));
         const ascendCostValues = ascendCost(state);
-        const confirmed = window.confirm(
-          `Ascend now for +${formatNumber(ascendGain)} Shards?\nThis spends ${formatNumber(ascendCostValues.matterCost)} Matter and ${formatNumber(ascendCostValues.fireCost)} Fire.`
-        );
-        if (!confirmed) {
-          return;
+        openModal({
+          kind: "ascend",
+          title: "Ascend?",
+          body: `Ascend now for <strong>+${formatNumber(ascendGain)} Shards</strong>.<br />This spends <strong>${formatNumber(ascendCostValues.matterCost)} Matter</strong> and <strong>${formatNumber(ascendCostValues.fireCost)} Fire</strong>.`,
+          confirmLabel: "Ascend",
+          cancelLabel: "Cancel"
+        });
+        return;
+      } else if (action === "modal:cancel") {
+        closeModal();
+      } else if (action === "modal:confirm") {
+        const kind = ui.modal?.kind;
+        closeModal();
+        if (kind === "ascend") {
+          const result = systems.actions.ascend();
+          setNotice(result.ok ? `Ascension complete. +${result.gain} shards.` : result.reason, result.ok);
+          renderPanel();
+        } else if (kind === "debug-load-completed") {
+          if (typeof debugOptions?.loadCompletedSave === "function") {
+            debugOptions.loadCompletedSave();
+          }
         }
-        const result = systems.actions.ascend();
-        setNotice(result.ok ? `Ascension complete. +${result.gain} shards.` : result.reason, result.ok);
-        renderPanel();
       } else if (action.startsWith("buy:")) {
         const generatorId = action.split(":")[1];
         const result = systems.generators.buy(generatorId);
@@ -2990,9 +3319,20 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
         const droppedCount = formatInt(result?.dropped?.count || 0);
         setNotice(result.ok ? `Dropped ${droppedCount}x ${droppedName}.` : result.reason, result.ok);
         renderPanel();
-      } else if (action === "dungeon:craft-close") {
-        const result = systems.dungeons.closeCraftingStation();
-        setNotice(result.ok ? "Workbench closed." : result.reason, result.ok);
+      } else if (action.startsWith("dungeon:use-slot:")) {
+        const slotIndex = Number(action.split(":")[2]);
+        const result = systems.dungeons.useInventorySlot(slotIndex);
+        setNotice(result.ok ? `Restored ${formatInt(result.healed || 0)} HP.` : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("dungeon:relic:")) {
+        const nodeId = action.split(":")[2] || "";
+        const result = systems.dungeons.buyRelicUpgrade(nodeId);
+        setNotice(result.ok ? `Relic upgrade purchased (level ${formatInt(result.level || 1)}).` : result.reason, result.ok);
+        renderPanel();
+      } else if (action.startsWith("dungeon:metacraft:")) {
+        const craftId = action.split(":")[2] || "";
+        const result = systems.dungeons.craftMeta(craftId);
+        setNotice(result.ok ? `Crafted (level ${formatInt(result.level || 1)}).` : result.reason, result.ok);
         renderPanel();
       } else if (action === "dungeon:descend") {
         const result = systems.dungeons.interactDescend();
@@ -3073,6 +3413,12 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
       refreshHud();
     });
 
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && ui.modal) {
+        closeModal();
+      }
+    });
+
     appEl.addEventListener("toggle", (event) => {
       const detailsEl = event.target instanceof Element
         ? event.target.closest("details.expedition-loot-table[data-loot-table-key]")
@@ -3105,6 +3451,17 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     }
 
     appEl.addEventListener("dragstart", (event) => {
+      const riftSlotEl = event.target.closest(".rift-cellslot[data-rift-slot]");
+      if (riftSlotEl) {
+        ui.riftDragSlot = riftSlotEl.dataset.riftSlot;
+        riftSlotEl.classList.add("dragging");
+        event.dataTransfer?.setData("text/plain", `rift-slot:${ui.riftDragSlot}`);
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+        }
+        return;
+      }
+
       const itemEl = event.target.closest(".inventory-item[data-part-id]");
       if (itemEl) {
         ui.draggingPartId = itemEl.dataset.partId || "";
@@ -3147,6 +3504,16 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     });
 
     appEl.addEventListener("dragend", (event) => {
+      if (ui.riftDragSlot != null) {
+        const draggingSlot = event.target.closest(".rift-cellslot.dragging");
+        if (draggingSlot) {
+          draggingSlot.classList.remove("dragging");
+        }
+        appEl.querySelectorAll(".rift-cellslot.dragging").forEach((el) => el.classList.remove("dragging"));
+        ui.riftDragSlot = null;
+        return;
+      }
+
       const sourceType = ui.dragSourceType;
       const sourceShipId = ui.dragSourceShipId;
       const sourceSlot = ui.dragSourceSlot;
@@ -3178,6 +3545,16 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     });
 
     appEl.addEventListener("dragover", (event) => {
+      if (ui.riftDragSlot != null) {
+        if (event.target.closest("[data-rift-dropzone]")) {
+          event.preventDefault();
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = "move";
+          }
+        }
+        return;
+      }
+
       const zoneEl = event.target.closest(".ship-zone[data-slot]");
       if (!zoneEl || !ui.draggingPartId) {
         return;
@@ -3207,6 +3584,22 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
     });
 
     appEl.addEventListener("drop", (event) => {
+      if (ui.riftDragSlot != null) {
+        const zone = event.target.closest("[data-rift-dropzone]");
+        const idx = Number(ui.riftDragSlot);
+        ui.riftDragSlot = null;
+        appEl.querySelectorAll(".rift-cellslot.dragging").forEach((el) => el.classList.remove("dragging"));
+        if (zone) {
+          event.preventDefault();
+          const result = systems.dungeons.dropInventorySlot(idx);
+          const droppedName = result?.dropped?.itemName || "item";
+          const droppedCount = formatInt(result?.dropped?.count || 0);
+          setNotice(result.ok ? `Dropped ${droppedCount}x ${droppedName}.` : result.reason, result.ok);
+          renderPanel();
+        }
+        return;
+      }
+
       const zoneEl = event.target.closest(".ship-zone[data-slot]");
       if (!zoneEl) {
         return;
@@ -3271,7 +3664,7 @@ export function createRenderer({ appEl, state, balance, currencyDisplay = {}, ge
   }
 
   function start() {
-    setupDungeonInteractionBubbles();
+    setupDungeonToasts();
     buildLayout();
     bindEvents();
     renderPanel();

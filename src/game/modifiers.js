@@ -19,6 +19,10 @@ export function recomputePerks({ state, balance, ascendNodes }) {
     furnaceRateMultiplier: 1,
     condenserRateMultiplier: 1,
     prismRateMultiplier: 1,
+    kilnRateMultiplier: 1,
+    crucibleRateMultiplier: 1,
+    aetherSpireRateMultiplier: 1,
+    crucibleSynergyPerPrism: 0,
     conversionCostMultiplier: 1,
     offlineEfficiencyMultiplier: 1,
     researchCostMultiplier: 1,
@@ -50,7 +54,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const vacuumSeals = (state.upgrades.vacuumSeals || 0) * upgradePower;
   if (vacuumSeals > 0) {
-    perks.matterRateMultiplier *= Math.pow(1.0025, vacuumSeals);
+    perks.kilnRateMultiplier *= Math.pow(1.005, vacuumSeals);
   }
   const fluxPistons = (state.upgrades.fluxPistons || 0) * upgradePower;
   if (fluxPistons > 0) {
@@ -86,7 +90,7 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const glassFoundry = (state.upgrades.glassFoundry || 0) * upgradePower;
   if (glassFoundry > 0) {
-    perks.productionMultiplier *= Math.pow(1.001, glassFoundry);
+    perks.aetherSpireRateMultiplier *= Math.pow(1.006, glassFoundry);
   }
 
   const runicGrip = (state.upgrades.runicGrip || 0) * upgradePower;
@@ -131,14 +135,11 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   }
   const twinFlux = (state.upgrades.twinFlux || 0) * upgradePower;
   if (twinFlux > 0) {
-    const fluxMultiplier = Math.pow(1.001, twinFlux);
-    perks.matterRateMultiplier *= fluxMultiplier;
-    perks.fireRateMultiplier *= fluxMultiplier;
+    perks.crucibleRateMultiplier *= Math.pow(1.005, twinFlux);
   }
   const alchemyWeave = (state.upgrades.alchemyWeave || 0) * upgradePower;
-  if (alchemyWeave > 0) {
-    perks.productionMultiplier *= Math.pow(1.0008, alchemyWeave);
-    perks.clickMultiplier *= Math.pow(1.0005, alchemyWeave);
+  if (alchemyWeave > 0 && (state.generators.aetherSpire || 0) >= 1) {
+    perks.productionMultiplier *= Math.pow(1.004, alchemyWeave);
   }
   const shardSiphon = (state.upgrades.shardSiphon || 0) * upgradePower;
   if (shardSiphon > 0) {
@@ -151,6 +152,37 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   const fluxRelay = (state.upgrades.fluxRelay || 0) * upgradePower;
   if (fluxRelay > 0) {
     perks.generatorCostGrowthMultiplier *= Math.pow(0.9993, fluxRelay);
+  }
+
+  const spireLevel = state.generators.aetherSpire || 0;
+  const condenserLevel = state.generators.condenser || 0;
+
+  const kilnGovernor = (state.upgrades.kilnGovernor || 0) * upgradePower;
+  if (kilnGovernor > 0) {
+    perks.kilnRateMultiplier *= Math.pow(1.004, kilnGovernor);
+  }
+  const emberLoom = (state.upgrades.emberLoom || 0) * upgradePower;
+  if (emberLoom > 0) {
+    perks.crucibleRateMultiplier *= Math.pow(1.004, emberLoom);
+  }
+  const prismChoir = (state.upgrades.prismChoir || 0) * upgradePower;
+  if (prismChoir > 0) {
+    perks.crucibleSynergyPerPrism += prismChoir * 0.004;
+  }
+  const loadBalancer = (state.upgrades.loadBalancer || 0) * upgradePower;
+  if (loadBalancer > 0 && condenserLevel >= 20) {
+    const matterGenBoost = Math.pow(1.06, loadBalancer);
+    perks.furnaceRateMultiplier *= matterGenBoost;
+    perks.condenserRateMultiplier *= matterGenBoost;
+    perks.kilnRateMultiplier *= matterGenBoost;
+  }
+  const spireConduit = (state.upgrades.spireConduit || 0) * upgradePower;
+  if (spireConduit > 0) {
+    perks.aetherSpireRateMultiplier *= Math.pow(1.005, spireConduit);
+  }
+  const harmonicTithe = (state.upgrades.harmonicTithe || 0) * upgradePower;
+  if (harmonicTithe > 0 && spireLevel > 0) {
+    perks.prestigeGainMultiplier *= 1 + harmonicTithe * spireLevel * 0.0012;
   }
 
   const thermoLevel = state.research.arcaneThermodynamics || 0;
@@ -278,6 +310,28 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   const shardFractal = state.research.shardFractal || 0;
   if (shardFractal > 0) {
     perks.prestigeGainMultiplier *= 1 + shardFractal * 0.03;
+  }
+
+  const kilnMetallurgy = state.research.kilnMetallurgy || 0;
+  if (kilnMetallurgy > 0) {
+    perks.kilnRateMultiplier *= 1 + kilnMetallurgy * 0.05;
+  }
+  const forgeSymbiosis = state.research.forgeSymbiosis || 0;
+  if (forgeSymbiosis > 0) {
+    perks.crucibleSynergyPerPrism += forgeSymbiosis * 0.004;
+  }
+  const spireResonance = state.research.spireResonance || 0;
+  if (spireResonance > 0) {
+    perks.aetherSpireRateMultiplier *= 1 + spireResonance * 0.05;
+  }
+  const convectionLoop = state.research.convectionLoop || 0;
+  if (convectionLoop > 0) {
+    const genTypesAtThreshold = Object.values(state.generators || {}).filter(
+      (count) => (Number(count) || 0) >= 10
+    ).length;
+    if (genTypesAtThreshold > 0) {
+      perks.productionMultiplier *= 1 + convectionLoop * 0.01 * genTypesAtThreshold;
+    }
   }
 
   if (Array.isArray(ascendNodes)) {
@@ -425,6 +479,10 @@ export function recomputePerks({ state, balance, ascendNodes }) {
   perks.furnaceRateMultiplier = clampMin(perks.furnaceRateMultiplier, 0.2);
   perks.condenserRateMultiplier = clampMin(perks.condenserRateMultiplier, 0.2);
   perks.prismRateMultiplier = clampMin(perks.prismRateMultiplier, 0.2);
+  perks.kilnRateMultiplier = clampMin(perks.kilnRateMultiplier, 0.2);
+  perks.crucibleRateMultiplier = clampMin(perks.crucibleRateMultiplier, 0.2);
+  perks.aetherSpireRateMultiplier = clampMin(perks.aetherSpireRateMultiplier, 0.2);
+  perks.crucibleSynergyPerPrism = Math.max(0, perks.crucibleSynergyPerPrism);
   perks.researchCostMultiplier = clampMin(perks.researchCostMultiplier, 0.05);
   perks.offlineEfficiencyMultiplier = clampMin(perks.offlineEfficiencyMultiplier, 0.1);
 

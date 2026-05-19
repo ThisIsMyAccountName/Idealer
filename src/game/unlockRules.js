@@ -19,5 +19,8 @@ export function isUnlockMet(state, unlock) {
     const count = Object.values(state.ascensionTree || {}).filter(Boolean).length;
     return count >= unlock.value;
   }
+  if (unlock.type === "generatorOwned") {
+    return (state.generators?.[unlock.generator] || 0) >= unlock.value;
+  }
   return true;
 }

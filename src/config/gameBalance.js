@@ -4,12 +4,12 @@ export const BALANCE = {
   autoSaveMs: 30000,
   offlineEfficiency: 0.5,
   baseClickMatter: 1,
-  elementConversionCost: 100,
-  prestigeDivisor: 100,
-  fireShardValue: 100,
-  ascendBaseMatter: 500,
-  ascendBaseFire: 5,
-  ascendCostGrowth: 1.6,
+  elementConversionCost: 60,
+  prestigeDivisor: 40,
+  fireShardValue: 60,
+  ascendBaseMatter: 1100,
+  ascendBaseFire: 8,
+  ascendCostGrowth: 1.5,
   generatorCostGrowth: 1.13,
   generators: {
     furnace: {
@@ -18,7 +18,8 @@ export const BALANCE = {
       resource: "matter",
       baseRate: 0.12,
       baseCost: 14,
-      costResource: "matter"
+      costResource: "matter",
+      rateMultiplierPerk: "furnaceRateMultiplier"
     },
     condenser: {
       id: "condenser",
@@ -26,15 +27,49 @@ export const BALANCE = {
       resource: "matter",
       baseRate: 0.48,
       baseCost: 140,
-      costResource: "matter"
+      costResource: "matter",
+      rateMultiplierPerk: "condenserRateMultiplier"
     },
     prism: {
       id: "prism",
       name: "Element Prism",
       resource: "fire",
-      baseRate: 0.08,
-      baseCost: 16,
-      costResource: "fire"
+      baseRate: 0.11,
+      baseCost: 10,
+      costResource: "fire",
+      rateMultiplierPerk: "prismRateMultiplier"
+    },
+    kiln: {
+      id: "kiln",
+      name: "Aether Kiln",
+      resource: "matter",
+      baseRate: 2.4,
+      baseCost: 36,
+      costResource: "fire",
+      rateMultiplierPerk: "kilnRateMultiplier",
+      unlock: { type: "fireSeen", value: 120 }
+    },
+    crucible: {
+      id: "crucible",
+      name: "Prism Crucible",
+      resource: "fire",
+      baseRate: 0.06,
+      baseCost: 900,
+      costResource: "matter",
+      rateMultiplierPerk: "crucibleRateMultiplier",
+      synergy: { generator: "prism", perk: "crucibleSynergyPerPrism" },
+      unlock: { type: "generatorOwned", generator: "prism", value: 10 }
+    },
+    aetherSpire: {
+      id: "aetherSpire",
+      name: "Aether Spire",
+      resource: "both",
+      baseRate: 0.012,
+      baseCost: 220,
+      costResource: "fire",
+      rateMultiplierPerk: "aetherSpireRateMultiplier",
+      meta: { type: "pooledFraction", split: 0.5 },
+      unlock: { type: "ascensions", value: 1 }
     }
   },
   upgradeOrder: [
@@ -66,7 +101,13 @@ export const BALANCE = {
     "catalystCoil",
     "refluxMatrix",
     "alchemyWeave",
-    "fluxRelay"
+    "fluxRelay",
+    "kilnGovernor",
+    "emberLoom",
+    "prismChoir",
+    "loadBalancer",
+    "spireConduit",
+    "harmonicTithe"
   ],
   researchOrder: [
     "arcaneThermodynamics",
@@ -96,7 +137,11 @@ export const BALANCE = {
     "transmuteCadence",
     "shardTheory",
     "shardFractal",
-    "transcendentSchema"
+    "transcendentSchema",
+    "kilnMetallurgy",
+    "forgeSymbiosis",
+    "spireResonance",
+    "convectionLoop"
   ],
   upgradeCostDefaults: {
     quadCap: 35,
@@ -189,7 +234,7 @@ export const BALANCE = {
       sloop: {
         id: "sloop",
         name: "Sloop",
-        purchaseCost: { matter: 9000, fire: 180, intel: 180 },
+        purchaseCost: { matter: 9000, fire: 180, intel: 150 },
         unlock: { type: "ascensionNode", value: "cartographerSpindle" },
         requiredBlueprint: "ship:sloop:keel-plan",
         facilityProfile: {
@@ -250,7 +295,7 @@ export const BALANCE = {
       brig: {
         id: "brig",
         name: "Brig",
-        purchaseCost: { matter: 28000, fire: 520, intel: 620 },
+        purchaseCost: { matter: 28000, fire: 520, intel: 520 },
         unlock: { type: "ascensionNode", value: "hazardSeals" },
         requiredBlueprint: "ship:brig:frame-draft",
         facilityProfile: {
@@ -311,7 +356,7 @@ export const BALANCE = {
       galleon: {
         id: "galleon",
         name: "Galleon",
-        purchaseCost: { matter: 75000, fire: 1400, intel: 1600 },
+        purchaseCost: { matter: 75000, fire: 1400, intel: 1200 },
         unlock: { type: "ascensionNodeCount", value: 24 },
         requiredBlueprint: "ship:galleon:royal-charter",
         facilityProfile: {
@@ -375,12 +420,12 @@ export const BALANCE = {
         label: "Hull",
         maxLevel: 6,
         levelCosts: [
-          { matter: 1200, fire: 20, intel: 2 },
-          { matter: 3200, fire: 55, intel: 4 },
-          { matter: 8400, fire: 130, intel: 8 },
-          { matter: 21000, fire: 300, intel: 14 },
-          { matter: 47000, fire: 640, intel: 22 },
-          { matter: 92000, fire: 1300, intel: 34 }
+          { matter: 1200, fire: 20, intel: 5 },
+          { matter: 3200, fire: 55, intel: 10 },
+          { matter: 8400, fire: 130, intel: 20 },
+          { matter: 21000, fire: 300, intel: 35 },
+          { matter: 47000, fire: 640, intel: 55 },
+          { matter: 92000, fire: 1300, intel: 85 }
         ],
         effectsPerLevel: {
           penaltyDampening: 0.04,
@@ -391,12 +436,12 @@ export const BALANCE = {
         label: "Sail",
         maxLevel: 6,
         levelCosts: [
-          { matter: 900, fire: 30, intel: 2 },
-          { matter: 2400, fire: 85, intel: 4 },
-          { matter: 6200, fire: 210, intel: 7 },
-          { matter: 15200, fire: 470, intel: 13 },
-          { matter: 36000, fire: 1020, intel: 21 },
-          { matter: 76000, fire: 2100, intel: 33 }
+          { matter: 900, fire: 30, intel: 5 },
+          { matter: 2400, fire: 85, intel: 10 },
+          { matter: 6200, fire: 210, intel: 18 },
+          { matter: 15200, fire: 470, intel: 33 },
+          { matter: 36000, fire: 1020, intel: 53 },
+          { matter: 76000, fire: 2100, intel: 83 }
         ],
         effectsPerLevel: {
           speedMultiplier: 0.045
@@ -406,11 +451,11 @@ export const BALANCE = {
         label: "Anchor",
         maxLevel: 5,
         levelCosts: [
-          { matter: 1000, fire: 22, intel: 2 },
-          { matter: 2800, fire: 72, intel: 5 },
-          { matter: 7200, fire: 180, intel: 10 },
-          { matter: 18000, fire: 420, intel: 17 },
-          { matter: 43000, fire: 930, intel: 27 }
+          { matter: 1000, fire: 22, intel: 5 },
+          { matter: 2800, fire: 72, intel: 13 },
+          { matter: 7200, fire: 180, intel: 25 },
+          { matter: 18000, fire: 420, intel: 43 },
+          { matter: 43000, fire: 930, intel: 68 }
         ],
         effectsPerLevel: {
           riskMitigation: 0.025
@@ -420,11 +465,11 @@ export const BALANCE = {
         label: "Net",
         maxLevel: 5,
         levelCosts: [
-          { matter: 1100, fire: 24, intel: 2 },
-          { matter: 3000, fire: 78, intel: 5 },
-          { matter: 7900, fire: 195, intel: 10 },
-          { matter: 19600, fire: 460, intel: 18 },
-          { matter: 46500, fire: 1000, intel: 30 }
+          { matter: 1100, fire: 24, intel: 5 },
+          { matter: 3000, fire: 78, intel: 13 },
+          { matter: 7900, fire: 195, intel: 25 },
+          { matter: 19600, fire: 460, intel: 45 },
+          { matter: 46500, fire: 1000, intel: 75 }
         ],
         effectsPerLevel: {
           rareDropWeight: 0.09,
@@ -434,7 +479,7 @@ export const BALANCE = {
     },
     duplicateBlueprintPolicy: {
       mode: "intel",
-      intelPerDuplicate: 4,
+      intelPerDuplicate: 12,
       shardsPerDuplicate: 0
     },
     voyageMaps: {
@@ -747,7 +792,7 @@ export const BALANCE = {
         cost: { matter: 1200, fire: 20 },
         unlock: { type: "ascensionNodeCount", value: 2 },
         purchaseIntelCost: 0,
-        rewards: { matter: 2400, fire: 28, shards: 0, intel: 5 },
+        rewards: { matter: 2400, fire: 28, shards: 0, intel: 12 },
         stageVarianceRanges: {
           riskDelta: { min: -0.03, max: 0.035 },
           yieldDelta: { min: -0.05, max: 0.05 },
@@ -821,8 +866,8 @@ export const BALANCE = {
         unlock: { type: "ascensionNodeCount", value: 4 },
         requiredNodes: ["expeditionKeystone"],
         requiredShip: "raft",
-        purchaseIntelCost: 650,
-        rewards: { matter: 5600, fire: 82, shards: 0, intel: 9 },
+        purchaseIntelCost: 60,
+        rewards: { matter: 5600, fire: 82, shards: 0, intel: 18 },
         stageVarianceRanges: {
           riskDelta: { min: -0.04, max: 0.05 },
           yieldDelta: { min: -0.06, max: 0.07 },
@@ -914,8 +959,8 @@ export const BALANCE = {
         cost: { matter: 4100, fire: 52 },
         unlock: { type: "ascensionNodeCount", value: 6 },
         requiredNodes: ["expeditionKeystone"],
-        purchaseIntelCost: 250,
-        rewards: { matter: 6300, fire: 95, shards: 0, intel: 14 },
+        purchaseIntelCost: 130,
+        rewards: { matter: 6300, fire: 95, shards: 0, intel: 26 },
         stageVarianceRanges: {
           riskDelta: { min: -0.05, max: 0.055 },
           yieldDelta: { min: -0.07, max: 0.08 },
@@ -1008,8 +1053,8 @@ export const BALANCE = {
         cost: { matter: 5200, fire: 60 },
         unlock: { type: "ascensionNodeCount", value: 7 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle"],
-        purchaseIntelCost: 0,
-        rewards: { matter: 9600, fire: 120, shards: 0, intel: 11 },
+        purchaseIntelCost: 220,
+        rewards: { matter: 9600, fire: 120, shards: 0, intel: 24 },
         stageVarianceRanges: {
           riskDelta: { min: -0.04, max: 0.05 },
           yieldDelta: { min: -0.06, max: 0.07 },
@@ -1103,8 +1148,8 @@ export const BALANCE = {
         unlock: { type: "ascensionNodeCount", value: 11 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle"],
         requiredShip: "sloop",
-        purchaseIntelCost: 2200,
-        rewards: { matter: 24500, fire: 360, shards: 0, intel: 22 },
+        purchaseIntelCost: 420,
+        rewards: { matter: 24500, fire: 360, shards: 0, intel: 48 },
         stageVarianceRanges: {
           riskDelta: { min: -0.05, max: 0.06 },
           yieldDelta: { min: -0.08, max: 0.1 },
@@ -1197,8 +1242,8 @@ export const BALANCE = {
         cost: { matter: 16000, fire: 210 },
         unlock: { type: "ascensionNodeCount", value: 13 },
         requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals"],
-        purchaseIntelCost: 0,
-        rewards: { matter: 36000, fire: 460, shards: 0, intel: 21 },
+        purchaseIntelCost: 700,
+        rewards: { matter: 36000, fire: 460, shards: 0, intel: 60 },
         stageVarianceRanges: {
           riskDelta: { min: -0.05, max: 0.06 },
           yieldDelta: { min: -0.08, max: 0.09 },
@@ -1313,8 +1358,8 @@ export const BALANCE = {
         requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals", "salvageVats"],
         requiredMapId: "map:abyssal-atlas",
         requiredShip: "brig",
-        purchaseIntelCost: 0,
-        rewards: { matter: 82000, fire: 980, shards: 1, intel: 34 },
+        purchaseIntelCost: 1200,
+        rewards: { matter: 82000, fire: 980, shards: 1, intel: 110 },
         stageVarianceRanges: {
           riskDelta: { min: -0.06, max: 0.08 },
           yieldDelta: { min: -0.09, max: 0.12 },
@@ -1429,8 +1474,8 @@ export const BALANCE = {
         requiredNodes: ["expeditionKeystone", "cartographerSpindle", "hazardSeals", "salvageVats"],
         requiredMapId: "map:sunken-registry",
         requiredShip: "galleon",
-        purchaseIntelCost: 0,
-        rewards: { matter: 210000, fire: 2600, shards: 2, intel: 62 },
+        purchaseIntelCost: 2200,
+        rewards: { matter: 210000, fire: 2600, shards: 2, intel: 200 },
         stageVarianceRanges: {
           riskDelta: { min: -0.07, max: 0.1 },
           yieldDelta: { min: -0.11, max: 0.16 },
@@ -1557,222 +1602,107 @@ export const BALANCE = {
   },
   riftDelve: {
     unlockNodeId: "riftDelveKeystone",
-    inventorySlots: 6,
+    inventorySlots: 9,
     grid: {
-      width: 15,
-      height: 15,
-      stepMs: 180
+      width: 13,
+      height: 13,
+      stepMs: 260
     },
     offlineProgressMultiplier: 0.45,
-    depthScaling: {
-      lockTierEveryDescend: 1,
-      mobPowerPerDescend: 0.1,
-      rewardPerDescend: 0.12
+    player: {
+      baseHp: 70,
+      basePower: 5,
+      toolPower: {
+        dagger: 4,
+        axe: 3,
+        pickaxe: 3,
+        sword: 9
+      }
     },
     combat: {
-      basePower: 1,
-      toolPower: {
-        dagger: 2,
-        axe: 3,
-        pickaxe: 2
-      }
+      tickMs: 1000
     },
-    roomOrder: ["start-room", "quarry-room", "forge-room", "descend-room"],
+    generation: {
+      baseRooms: 4,
+      roomsPerDepth: 0.5,
+      maxRooms: 12,
+      collapsedDoorChance: 0.18,
+      obstacleClusters: [2, 5],
+      clusterSize: [2, 4],
+      barrierChance: 0.5
+    },
+    bossName: "Rift Warden",
+    bossScaling: {
+      power: 1.8,
+      hp: 2.2,
+      damage: 1.3,
+      loot: 3
+    },
+    depthScaling: {
+      mobPowerPerDepth: 0.1,
+      mobHpPerDepth: 0.12,
+      mobDamagePerDepth: 0.07,
+      nodeChargesPerDepth: 0.34,
+      lootCountPerDepth: 0.12,
+      rewardPerDepth: 0.12
+    },
     itemDefs: {
-      dagger: {
-        id: "dagger",
-        name: "Rust Dagger",
-        type: "tool",
-        toolTag: "dagger",
-        maxStack: 1
-      },
-      axe: {
-        id: "axe",
-        name: "Woodcutter Axe",
-        type: "tool",
-        toolTag: "axe",
-        maxStack: 1
-      },
-      pickaxe: {
-        id: "pickaxe",
-        name: "Miner Pickaxe",
-        type: "tool",
-        toolTag: "pickaxe",
-        maxStack: 1
-      },
-      wood: {
-        id: "wood",
-        name: "Wood",
-        type: "material",
-        maxStack: 99
-      },
-      stone: {
-        id: "stone",
-        name: "Stone",
-        type: "material",
-        maxStack: 99
-      },
-      keyWood: {
-        id: "keyWood",
-        name: "Wood Key",
-        type: "key",
-        unlockTags: ["wood", "timber"],
-        maxStack: 20
-      },
-      keyStone: {
-        id: "keyStone",
-        name: "Stone Key",
-        type: "key",
-        unlockTags: ["stone", "ore", "rift"],
-        maxStack: 20
-      }
+      dagger: { id: "dagger", name: "Rust Dagger", type: "tool", toolTag: "dagger", maxStack: 1 },
+      axe: { id: "axe", name: "Woodcutter Axe", type: "tool", toolTag: "axe", maxStack: 1 },
+      pickaxe: { id: "pickaxe", name: "Miner Pickaxe", type: "tool", toolTag: "pickaxe", maxStack: 1 },
+      sword: { id: "sword", name: "Rift Sword", type: "tool", toolTag: "sword", maxStack: 1 },
+      wood: { id: "wood", name: "Wood", type: "material", maxStack: 99 },
+      stone: { id: "stone", name: "Stone", type: "material", maxStack: 99 },
+      herb: { id: "herb", name: "Glow Herb", type: "material", maxStack: 99 },
+      shardDust: { id: "shardDust", name: "Shard Dust", type: "material", maxStack: 99 },
+      salve: { id: "salve", name: "Healing Salve", type: "consumable", heal: 25, maxStack: 20 },
+      tonic: { id: "tonic", name: "Vital Tonic", type: "consumable", heal: 60, maxStack: 20 },
+      healStone: { id: "healStone", name: "Heal Stone", type: "consumable", heal: 45, maxStack: 9 },
+      etherDust: { id: "etherDust", name: "Ether Dust", type: "material", meta: true, maxStack: 999 },
+      voidIron: { id: "voidIron", name: "Void Iron", type: "material", meta: true, maxStack: 999 },
+      riftCore: { id: "riftCore", name: "Rift Core", type: "material", meta: true, maxStack: 999 }
     },
-    gatherNodes: {
-      tree: {
-        id: "tree",
-        name: "Tree",
-        requiredTool: "axe",
-        yieldItemId: "wood",
-        yieldCount: 2,
-        baseCharges: 4
-      },
-      rocks: {
-        id: "rocks",
-        name: "Rocks",
-        requiredTool: "pickaxe",
-        yieldItemId: "stone",
-        yieldCount: 2,
-        baseCharges: 4
-      }
+    gatherNodeDefs: {
+      tree: { id: "tree", name: "Glimmer Tree", requiredTool: "axe", yieldItemId: "wood", yieldCount: [1, 3], baseCharges: 3 },
+      rocks: { id: "rocks", name: "Ore Vein", requiredTool: "pickaxe", yieldItemId: "stone", yieldCount: [1, 3], baseCharges: 3 },
+      herb: { id: "herb", name: "Glow Herb", requiredTool: null, yieldItemId: "herb", yieldCount: [1, 2], baseCharges: 2 }
     },
+    gatherNodePool: ["tree", "rocks", "herb"],
     mobDefs: {
-      "root-scrambler": {
-        id: "root-scrambler",
-        name: "Root Scrambler",
-        basePower: 4,
-        failPenalty: { matter: 35, fire: 0 },
-        drops: [
-          { itemId: "wood", count: 2 }
-        ]
-      },
-      "quarry-mite": {
-        id: "quarry-mite",
-        name: "Quarry Mite",
-        basePower: 6,
-        failPenalty: { matter: 60, fire: 1 },
-        drops: [
-          { itemId: "stone", count: 2 },
-          { itemId: "wood", count: 1 }
-        ]
-      }
+      wisp: { id: "wisp", name: "Rift Wisp", basePower: 2, baseHp: 7, baseDamage: 2, minDepth: 1, drops: [{ itemId: "shardDust", count: [1, 2] }] },
+      scrambler: { id: "scrambler", name: "Root Scrambler", basePower: 4, baseHp: 11, baseDamage: 3, minDepth: 1, drops: [{ itemId: "wood", count: [1, 3] }] },
+      mite: { id: "mite", name: "Quarry Mite", basePower: 6, baseHp: 16, baseDamage: 4, minDepth: 2, drops: [{ itemId: "stone", count: [1, 3] }, { itemId: "shardDust", count: [1, 2] }, { itemId: "etherDust", count: [1, 2] }] },
+      warden: { id: "warden", name: "Rift Warden", basePower: 10, baseHp: 26, baseDamage: 6, minDepth: 4, drops: [{ itemId: "shardDust", count: [2, 4] }, { itemId: "voidIron", count: [1, 2] }, { itemId: "riftCore", count: [1, 1] }] }
     },
+    mobPool: ["wisp", "scrambler", "mite", "warden"],
     chestDefs: {
-      "workbench-cache": {
-        id: "workbench-cache",
-        name: "Workbench Cache",
-        loot: [
-          { itemId: "wood", count: 2 }
-        ]
-      },
-      "quarry-lockbox": {
-        id: "quarry-lockbox",
-        name: "Quarry Lockbox",
-        loot: [
-          { itemId: "stone", count: 2 },
-          { itemId: "keyWood", count: 1 }
-        ]
-      }
+      common: { id: "common", name: "Rift Cache", loot: [{ itemId: "wood", count: [1, 3] }, { itemId: "shardDust", count: [1, 2] }, { itemId: "etherDust", count: [1, 2] }] },
+      rare: { id: "rare", name: "Rift Lockbox", loot: [{ itemId: "stone", count: [2, 4] }, { itemId: "salve", count: [1, 1] }, { itemId: "etherDust", count: [2, 3] }, { itemId: "voidIron", count: [1, 1] }] }
     },
+    chestPool: ["common", "rare"],
     craftingRecipes: [
-      {
-        id: "craft-wood-key",
-        name: "Wood Key",
-        costs: [
-          { itemId: "wood", count: 3 }
-        ],
-        output: { itemId: "keyWood", count: 1 }
-      },
-      {
-        id: "craft-stone-key",
-        name: "Stone Key",
-        costs: [
-          { itemId: "wood", count: 2 },
-          { itemId: "stone", count: 3 }
-        ],
-        output: { itemId: "keyStone", count: 1 }
-      }
+      { id: "craft-salve", name: "Healing Salve", costs: [{ itemId: "herb", count: 2 }], output: { itemId: "salve", count: 1 } },
+      { id: "craft-tonic", name: "Vital Tonic", costs: [{ itemId: "herb", count: 3 }, { itemId: "shardDust", count: 2 }], output: { itemId: "tonic", count: 1 } },
+      { id: "craft-sword", name: "Rift Sword", costs: [{ itemId: "wood", count: 3 }, { itemId: "stone", count: 4 }], output: { itemId: "sword", count: 1 } }
     ],
-    roomTemplates: {
-      "start-room": {
-        id: "start-room",
-        name: "Threshold Workshop",
-        description: "A square chamber with four sealed doors and a rough workbench.",
-        special: {
-          type: "crafting",
-          name: "Workbench"
-        },
-        floorItems: ["dagger", "axe"],
-        gatherNodes: ["tree"],
-        mobs: ["root-scrambler"],
-        chests: ["workbench-cache"]
-      },
-      "quarry-room": {
-        id: "quarry-room",
-        name: "Shale Quarry",
-        description: "Broken quarry stones and old supply hooks line the walls.",
-        floorItems: ["pickaxe"],
-        gatherNodes: ["rocks"],
-        mobs: ["quarry-mite"],
-        chests: ["quarry-lockbox"]
-      },
-      "forge-room": {
-        id: "forge-room",
-        name: "Echo Forge",
-        description: "An old forge crackles with unstable key-smithing sparks.",
-        floorItems: [],
-        gatherNodes: ["rocks", "tree"],
-        mobs: ["quarry-mite", "root-scrambler"],
-        chests: ["quarry-lockbox"]
-      },
-      "descend-room": {
-        id: "descend-room",
-        name: "Descend Chamber",
-        description: "A black hole pulses at the center of this silent room.",
-        special: {
-          type: "descend",
-          name: "Black Hole"
-        },
-        floorItems: [],
-        gatherNodes: [],
-        mobs: [],
-        chests: []
-      }
+    startRoom: {
+      name: "Threshold",
+      description: "The entrance ledge into the rift.",
+      floorItems: ["dagger", "axe", "pickaxe"],
+      mobs: [0, 0],
+      chests: [0, 0],
+      gatherNodes: [0, 1]
     },
-    doorGraph: {
-      "start-room": {
-        north: { target: "quarry-room", lockTag: "wood", blocked: false },
-        east: { target: null, lockTag: "timber", blocked: true },
-        south: { target: null, lockTag: "stone", blocked: true },
-        west: { target: null, lockTag: "ore", blocked: true }
-      },
-      "quarry-room": {
-        north: { target: "forge-room", lockTag: "stone", blocked: false },
-        east: { target: null, lockTag: "rift", blocked: true },
-        south: { target: "start-room", lockTag: null, blocked: false },
-        west: { target: null, lockTag: "timber", blocked: true }
-      },
-      "forge-room": {
-        north: { target: "descend-room", lockTag: "rift", blocked: false },
-        east: { target: null, lockTag: "rift", blocked: true },
-        south: { target: "quarry-room", lockTag: null, blocked: false },
-        west: { target: null, lockTag: "ore", blocked: true }
-      },
-      "descend-room": {
-        north: { target: null, lockTag: "rift", blocked: true },
-        east: { target: null, lockTag: "rift", blocked: true },
-        south: { target: "forge-room", lockTag: null, blocked: false },
-        west: { target: null, lockTag: "rift", blocked: true }
-      }
+    descendRoom: {
+      name: "Collapse Chamber",
+      description: "A black hole pulses silently at the heart of the room.",
+      special: "descend"
+    },
+    archetypes: {
+      combat: { weight: 3, name: "Haunted Hall", description: "Hostile shapes drift between broken pillars.", mobs: [2, 4], chests: [0, 1], gatherNodes: [0, 1] },
+      gather: { weight: 3, name: "Resource Vein", description: "Rich seams and growth line the walls.", mobs: [0, 1], chests: [0, 1], gatherNodes: [2, 3] },
+      treasure: { weight: 2, name: "Hoard Vault", description: "Old caches sit half-buried in rubble.", mobs: [1, 2], chests: [2, 3], gatherNodes: [0, 0] },
+      forge: { weight: 2, name: "Echo Forge", description: "A scorched chamber strewn with old smithing scrap.", mobs: [0, 1], chests: [0, 1], gatherNodes: [1, 2] }
     },
     rewards: {
       descendBase: {
@@ -1781,7 +1711,64 @@ export const BALANCE = {
         shards: 1,
         relics: 1
       }
-    }
+    },
+    relicTree: {
+      vigor: { id: "vigor", name: "Vigor", desc: "+15 max HP", maxLevel: 12, baseCost: 2, costGrowth: 1.5, effect: { maxHpPerLevel: 15 } },
+      might: { id: "might", name: "Might", desc: "+2 combat power", maxLevel: 12, baseCost: 2, costGrowth: 1.55, effect: { powerPerLevel: 2 } },
+      satchel: { id: "satchel", name: "Satchel", desc: "+1 inventory slot", maxLevel: 4, baseCost: 4, costGrowth: 2, effect: { slotsPerLevel: 1 } },
+      prospector: { id: "prospector", name: "Prospector", desc: "+12% loot & gather yield", maxLevel: 8, baseCost: 3, costGrowth: 1.7, effect: { lootMultPerLevel: 0.12 } },
+      fortune: { id: "fortune", name: "Fortune", desc: "+10% descend reward", maxLevel: 8, baseCost: 3, costGrowth: 1.75, effect: { rewardMultPerLevel: 0.1 } },
+      swiftness: { id: "swiftness", name: "Swiftness", desc: "-8% step time", maxLevel: 5, baseCost: 3, costGrowth: 1.8, effect: { stepMultPerLevel: -0.08 } },
+      armory: { id: "armory", name: "Armory", desc: "Start every run with a Rift Sword", maxLevel: 1, baseCost: 14, costGrowth: 1, effect: { startTool: "sword" } }
+    },
+    metaCrafts: {
+      forgedBlade: {
+        id: "forgedBlade",
+        name: "Forged Blade",
+        desc: "+3 combat power per level",
+        maxLevel: 8,
+        baseCost: { etherDust: 4 },
+        costGrowth: 1.6,
+        effect: { powerPerLevel: 3 }
+      },
+      wardPlate: {
+        id: "wardPlate",
+        name: "Ward Plate",
+        desc: "-1 damage taken & +12 max HP per level",
+        maxLevel: 6,
+        baseCost: { etherDust: 3, voidIron: 1 },
+        costGrowth: 1.7,
+        effect: { damageReducePerLevel: 1, maxHpPerLevel: 12 }
+      },
+      delversPack: {
+        id: "delversPack",
+        name: "Delver's Pack",
+        desc: "+2 inventory slots per level",
+        maxLevel: 3,
+        baseCost: { voidIron: 2 },
+        costGrowth: 2,
+        effect: { slotsPerLevel: 2 }
+      },
+      healStone: {
+        id: "healStone",
+        name: "Heal Stone",
+        desc: "Start each run with a Heal Stone (+1 charge per level)",
+        maxLevel: 5,
+        baseCost: { etherDust: 5, voidIron: 1 },
+        costGrowth: 1.8,
+        effect: { healStoneChargesPerLevel: 1 }
+      },
+      autoAmulet: {
+        id: "autoAmulet",
+        name: "Auto-Heal Amulet",
+        desc: "Automatically use a heal item when below 35% HP",
+        maxLevel: 1,
+        baseCost: { voidIron: 3, riftCore: 2 },
+        costGrowth: 1,
+        effect: { autoHeal: true }
+      }
+    },
+    autoHealThreshold: 0.35
   },
   upgradePower: 10,
   upgrades: {
@@ -1821,7 +1808,7 @@ export const BALANCE = {
     vacuumSeals: {
       id: "vacuumSeals",
       name: "Vacuum Seals",
-      description: "+0.25% Matter production",
+      description: "+0.5% Aether Kiln output",
       costResource: "matter",
       maxTier: 999,
       baseCost: 1200
@@ -1893,7 +1880,7 @@ export const BALANCE = {
     glassFoundry: {
       id: "glassFoundry",
       name: "Glass Foundry",
-      description: "+0.1% all production",
+      description: "+0.6% Aether Spire output",
       costResource: "matter",
       maxTier: 999,
       baseCost: 4000
@@ -1981,7 +1968,7 @@ export const BALANCE = {
     twinFlux: {
       id: "twinFlux",
       name: "Twin Flux",
-      description: "+0.1% Matter and Fire production",
+      description: "+0.5% Prism Crucible output",
       costResource: "matter",
       maxTier: 999,
       baseCost: 2100
@@ -1989,7 +1976,7 @@ export const BALANCE = {
     alchemyWeave: {
       id: "alchemyWeave",
       name: "Alchemy Weave",
-      description: "+0.08% all production and +0.05% click power",
+      description: "+0.4% all production while you own ≥ 1 Aether Spire",
       costResource: "matter",
       maxTier: 999,
       baseCost: 3200
@@ -2017,6 +2004,54 @@ export const BALANCE = {
       costResource: "matter",
       maxTier: 999,
       baseCost: 3600
+    },
+    kilnGovernor: {
+      id: "kilnGovernor",
+      name: "Kiln Governor",
+      description: "+0.4% Aether Kiln output",
+      costResource: "matter",
+      maxTier: 999,
+      baseCost: 5200
+    },
+    emberLoom: {
+      id: "emberLoom",
+      name: "Ember Loom",
+      description: "+0.4% Prism Crucible output",
+      costResource: "matter",
+      maxTier: 999,
+      baseCost: 6400
+    },
+    prismChoir: {
+      id: "prismChoir",
+      name: "Prism Choir",
+      description: "Crucible gains +0.4% output per Prism owned",
+      costResource: "matter",
+      maxTier: 60,
+      baseCost: 8200
+    },
+    loadBalancer: {
+      id: "loadBalancer",
+      name: "Load Balancer",
+      description: "While you own ≥ 20 Condensers: +6% all matter generators",
+      costResource: "matter",
+      maxTier: 40,
+      baseCost: 9000
+    },
+    spireConduit: {
+      id: "spireConduit",
+      name: "Spire Conduit",
+      description: "+0.5% Aether Spire output",
+      costResource: "matter",
+      maxTier: 999,
+      baseCost: 12000
+    },
+    harmonicTithe: {
+      id: "harmonicTithe",
+      name: "Harmonic Tithe",
+      description: "Each Aether Spire level grants +0.12% shard gain",
+      costResource: "matter",
+      maxTier: 40,
+      baseCost: 16000
     }
   },
   research: {
@@ -2025,8 +2060,8 @@ export const BALANCE = {
       name: "Arcane Thermodynamics",
       description: "+3% Matter production",
       maxLevel: 5,
-      baseCost: 12,
-      costGrowth: 1.6,
+      baseCost: 7,
+      costGrowth: 1.45,
       costResource: "fire",
       unlock: { type: "matterSeen", value: 1000 }
     },
@@ -2035,8 +2070,8 @@ export const BALANCE = {
       name: "Crystal Lattice",
       description: "+4% Fire production",
       maxLevel: 4,
-      baseCost: 20,
-      costGrowth: 1.65,
+      baseCost: 12,
+      costGrowth: 1.45,
       costResource: "fire",
       unlock: { type: "fireSeen", value: 25 }
     },
@@ -2055,8 +2090,8 @@ export const BALANCE = {
       name: "Field Resonance",
       description: "+2% Matter production",
       maxLevel: 5,
-      baseCost: 14,
-      costGrowth: 1.6,
+      baseCost: 8,
+      costGrowth: 1.55,
       costResource: "fire",
       unlock: { type: "matterSeen", value: 2200 }
     },
@@ -2065,8 +2100,8 @@ export const BALANCE = {
       name: "Ignition Spiral",
       description: "+3% Fire production",
       maxLevel: 4,
-      baseCost: 22,
-      costGrowth: 1.7,
+      baseCost: 13,
+      costGrowth: 1.6,
       costResource: "fire",
       unlock: { type: "fireSeen", value: 45 }
     },
@@ -2075,8 +2110,8 @@ export const BALANCE = {
       name: "Metallurgic Memory",
       description: "Conversion cost -2%",
       maxLevel: 4,
-      baseCost: 18,
-      costGrowth: 1.65,
+      baseCost: 11,
+      costGrowth: 1.58,
       costResource: "fire",
       unlock: { type: "matterSeen", value: 2500 }
     },
@@ -2155,8 +2190,8 @@ export const BALANCE = {
       name: "Kinetic Amplifier",
       description: "+6% click power",
       maxLevel: 4,
-      baseCost: 18,
-      costGrowth: 1.6,
+      baseCost: 11,
+      costGrowth: 1.45,
       costResource: "fire",
       unlock: { type: "matterSeen", value: 800 }
     },
@@ -2165,8 +2200,8 @@ export const BALANCE = {
       name: "Furnace Tuning",
       description: "+5% Furnace output",
       maxLevel: 4,
-      baseCost: 20,
-      costGrowth: 1.62,
+      baseCost: 12,
+      costGrowth: 1.55,
       costResource: "fire",
       unlock: { type: "matterSeen", value: 1400 }
     },
@@ -2175,8 +2210,8 @@ export const BALANCE = {
       name: "Condenser Tuning",
       description: "+5% Condenser output",
       maxLevel: 4,
-      baseCost: 24,
-      costGrowth: 1.64,
+      baseCost: 14,
+      costGrowth: 1.58,
       costResource: "fire",
       unlock: { type: "matterSeen", value: 2200 }
     },
@@ -2297,6 +2332,46 @@ export const BALANCE = {
       maxLevel: 3,
       baseCost: 60,
       costGrowth: 1.75,
+      costResource: "fire",
+      unlock: { type: "ascensions", value: 1 }
+    },
+    kilnMetallurgy: {
+      id: "kilnMetallurgy",
+      name: "Kiln Metallurgy",
+      description: "+5% Aether Kiln output",
+      maxLevel: 5,
+      baseCost: 34,
+      costGrowth: 1.66,
+      costResource: "fire",
+      unlock: { type: "fireSeen", value: 140 }
+    },
+    forgeSymbiosis: {
+      id: "forgeSymbiosis",
+      name: "Forge Symbiosis",
+      description: "Crucible gains +0.4% output per Prism owned",
+      maxLevel: 4,
+      baseCost: 42,
+      costGrowth: 1.7,
+      costResource: "fire",
+      unlock: { type: "fireSeen", value: 220 }
+    },
+    spireResonance: {
+      id: "spireResonance",
+      name: "Spire Resonance",
+      description: "+5% Aether Spire output",
+      maxLevel: 5,
+      baseCost: 70,
+      costGrowth: 1.78,
+      costResource: "fire",
+      unlock: { type: "ascensions", value: 1 }
+    },
+    convectionLoop: {
+      id: "convectionLoop",
+      name: "Convection Loop",
+      description: "+1% all production per generator type you own ≥ 10 of",
+      maxLevel: 3,
+      baseCost: 90,
+      costGrowth: 1.82,
       costResource: "fire",
       unlock: { type: "ascensions", value: 1 }
     }
